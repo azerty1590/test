@@ -1,7 +1,7 @@
 const $ = (sel) => document.querySelector(sel);
 const statusEl = $('#status');
 const buttons = [...document.querySelectorAll('.mode')];
-const settingIds = ['difficulty', 'seekTime', 'guesses', 'hideTime'];
+const settingIds = ['difficulty', 'seekTime', 'guesses', 'hideTime', 'hiders', 'sound'];
 
 function showStatus(text, ok) {
   statusEl.textContent = text;
@@ -17,6 +17,8 @@ function readSettings() {
     seekTime: Number(s.seekTime),
     guesses: Number(s.guesses),
     hideTime: Number(s.hideTime),
+    hiders: Number(s.hiders),
+    sound: s.sound !== 'off',
   };
 }
 
@@ -24,7 +26,9 @@ async function loadState() {
   const { settings, stats } = await chrome.storage.local.get(['settings', 'stats']);
   if (settings) {
     for (const id of settingIds) {
-      if (settings[id] != null) document.getElementById(id).value = String(settings[id]);
+      if (settings[id] == null) continue;
+      const v = id === 'sound' ? (settings[id] ? 'on' : 'off') : String(settings[id]);
+      document.getElementById(id).value = v;
     }
   }
   const st = stats || {};

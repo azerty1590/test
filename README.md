@@ -6,7 +6,7 @@ Turn **any web page** into a hide-and-seek arena. A hider gets a blank grey slab
 
 | Mode | What happens |
 | --- | --- |
-| **Hide & Seek** (hot-seat) | Player 1 paints and hides a slab, hands over the device, player 2 seeks. Roles swap each round. |
+| **Hide & Seek** (hot-seat) | Player 1 paints and hides a slab, hands over the device, player 2 seeks. Roles swap each round. Set **Hiders** to 2 or 3 for party rounds where every hider paints in turn and the seeker must find them all. |
 | **Chameleon Hunt** (solo) | The extension hides several slabs that copy the page almost perfectly. Each has a tiny giveaway: a slightly shifted colour, a nudged pattern and a little eye. Find them all before time runs out. Rounds get bigger. |
 | **Hide & Share** | Paint and hide, then copy a code. A friend opens the same page and pastes it in **Seek from Code**. |
 | **Seek from Code** | Paste a friend's code and hunt. |
@@ -19,7 +19,7 @@ Turn **any web page** into a hide-and-seek arena. A hider gets a blank grey slab
 - **Fill** (`F`), **Move** (`M` or Shift+drag), slab resize slider, undo (`Ctrl+Z`), reset.
 - A live **camo score** tells the hider how close the slab is to what is behind it.
 
-Seekers get a countdown, limited guesses, warmer/colder feedback, and a hint button that costs 10 seconds.
+Seekers get a countdown, limited guesses, warmer/colder feedback, and a hint button that costs 10 seconds. Short synthesised sound cues can be turned off in the popup.
 
 ## Install (unpacked)
 
@@ -40,8 +40,15 @@ Pages the browser refuses to capture (`chrome://`, the Web Store) cannot be used
 
 ```
 npm test          # unit tests for the pure game logic (content/lib.js)
+npm run smoke     # headless-Chromium end-to-end run of every mode (needs playwright + chromium)
 npm run icons     # regenerate icons/*.png
 npm run pack      # zip the extension for distribution
+```
+
+The smoke test loads the unpacked extension into headless Chromium at device scale factor 2, checks the service worker and popup, then plays every mode against a locally served page. Playwright is resolved from `NODE_PATH` if it is installed globally:
+
+```
+PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers NODE_PATH=$(npm root -g) npm run smoke
 ```
 
 Layout:

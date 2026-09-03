@@ -66,8 +66,13 @@ async function main() {
     await popup.waitForFunction(() => document.querySelector('#stRounds').textContent === '1');
     assert.equal(await popup.locator('#stCamo').textContent(), '77%');
     await popup.selectOption('#difficulty', 'hard');
+    await popup.selectOption('#sound', 'off');
     const saved = await popup.evaluate(async () => (await chrome.storage.local.get('settings')).settings);
     assert.equal(saved.difficulty, 'hard');
+    assert.equal(saved.sound, false);
+    assert.equal(saved.hiders, 1);
+    await popup.reload();
+    assert.equal(await popup.inputValue('#sound'), 'off', 'sound setting restored');
     await popup.screenshot({ path: path.join(OUT, 'popup.png') });
   });
   await step('popup launch reaches the worker and reports uncapturable pages', async () => {
@@ -216,6 +221,41 @@ async function main() {
     await shot('hotseat-result.png');
     await clickBtn('Swap roles');
     await page.waitForFunction(() => window.__HSP__.game.round === 2 && window.__HSP__.game.phase === 'brief');
+  });
+
+  await step('hotseat with 2 hiders: overlap is refused, seeker must find both, per-hider results', async () => {
+    await start('hotseat', { difficulty: 'normal', seekTime: 45, guesses: 0, hideTime: 0, hiders: 2, sound: false });
+    assert.match(await sh().locator('.modal').textContent(), /Hider 1 of 2/);
+    await clickBtn('Start painting');
+    await clickBtn('Hide it!');
+    await page.waitForFunction(() => window.__HSP__.game.phase === 'handoff');
+    assert.match(await sh().locator('.modal').textContent(), /Pass the device to hider 2/);
+    await clickBtn('I am hider 2');
+    assert.match(await sh().locator('.modal').textContent(), /Hider 2 of 2/);
+    await clickBtn('Start painting');
+    assert.equal(await g(() => window.__HSP__.game.slabs.length), 2);
+    // Second slab spawns on top of the first: hiding must be refused.
+    await clickBtn('Hide it!');
+    assert.equal(await g(() => window.__HSP__.game.phase), 'paint', 'overlap refused');
+    const s = await g(() => { const s = window.__HSP__.game.active; return { x: s.x, y: s.y, w: s.w, h: s.h }; });
+    await page.keyboard.down('Shift');
+    await page.mouse.move(s.x + s.w / 2, s.y + s.h / 2); await page.mouse.down(); await page.mouse.move(300, 650, { steps: 8 }); await page.mouse.up();
+    await page.keyboard.up('Shift');
+    await clickBtn('Hide it!');
+    await page.waitForFunction(() => window.__HSP__.game.phase === 'handoff');
+    assert.match(await sh().locator('.modal').textContent(), /Pass the device to the seeker/);
+    await clickBtn('I am the seeker');
+    const slabs = await g(() => window.__HSP__.game.slabs.map((s) => ({ x: s.x, y: s.y, w: s.w, h: s.h })));
+    await page.mouse.click(slabs[1].x + slabs[1].w / 2, slabs[1].y + slabs[1].h / 2);
+    assert.equal(await g(() => window.__HSP__.game.phase), 'seek', 'one of two found keeps seeking');
+    assert.equal(await sh().locator('.stat b').nth(2).textContent(), '1/2');
+    await page.mouse.click(slabs[0].x + slabs[0].w / 2, slabs[0].y + slabs[0].h / 2);
+    await page.waitForFunction(() => window.__HSP__.game.phase === 'result');
+    const txt = await sh().locator('.modal').textContent();
+    assert.match(txt, /All found/);
+    assert.match(txt, /Hider 1 · camo/);
+    assert.match(txt, /Hider 2 · camo/);
+    await shot('hotseat-two-hiders.png');
   });
 
   await step('hotseat: running out of guesses ends the round with the slab revealed', async () => {

@@ -165,10 +165,57 @@
     return n;
   }
 
+  // Tiny WebAudio synth for feedback beeps. Never throws.
+  class Sfx {
+    constructor(enabled) { this.enabled = enabled; this.ctx = null; }
+    play(kind) {
+      if (!this.enabled) return;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        this.ctx = this.ctx || new AC();
+        const c = this.ctx;
+        if (c.state === 'suspended') c.resume();
+        const notes = {
+          hit: [[660, 0, 0.08], [990, 0.08, 0.14]],
+          miss: [[200, 0, 0.18]],
+          win: [[523, 0, 0.1], [659, 0.1, 0.1], [784, 0.2, 0.1], [1047, 0.3, 0.3]],
+          lose: [[330, 0, 0.2], [247, 0.2, 0.4]],
+          tick: [[1400, 0, 0.03]],
+          pick: [[900, 0, 0.04]],
+          hide: [[440, 0, 0.08], [554, 0.08, 0.16]],
+        }[kind] || [];
+        for (const [f, t, d] of notes) {
+          const o = c.createOscillator();
+          const g = c.createGain();
+          o.type = kind === 'miss' || kind === 'lose' ? 'sawtooth' : 'sine';
+          o.frequency.value = f;
+          const at = c.currentTime + t;
+          g.gain.setValueAtTime(0.0001, at);
+          g.gain.exponentialRampToValueAtTime(0.1, at + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.0001, at + d);
+          o.connect(g).connect(c.destination);
+          o.start(at);
+          o.stop(at + d + 0.02);
+        }
+      } catch { /* audio is optional */ }
+    }
+  }
+
+  function safeSend(msg) {
+    try {
+      return Promise.resolve(chrome.runtime.sendMessage(msg)).catch(() => null);
+    } catch {
+      return Promise.resolve(null);
+    }
+  }
+
   class Game {
     constructor(opts) {
       this.mode = opts.mode;
-      this.settings = Object.assign({ difficulty: 'normal', seekTime: 45, guesses: 3, hideTime: 90 }, opts.settings || {});
+      this.settings = Object.assign({ difficulty: 'normal', seekTime: 45, guesses: 3, hideTime: 90, hiders: 1, sound: true }, opts.settings || {});
+      this.settings.hiders = L.clamp(Number(this.settings.hiders) || 1, 1, 3);
+      this.sfx = new Sfx(this.settings.sound !== false);
       this.vw = window.innerWidth;
       this.vh = window.innerHeight;
       this.slabs = [];
@@ -223,6 +270,15 @@
       this.root.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
       this.onKey = (e) => this.handleKey(e);
       window.addEventListener('keydown', this.onKey, true);
+      this.onResize = () => {
+        clearTimeout(this.resizeT);
+        this.resizeT = setTimeout(() => {
+          if (window.innerWidth !== this.vw || window.innerHeight !== this.vh) {
+            this.showToast('Window resized - the arena keeps its original size. Use "New snapshot" for a fresh one.', 3500);
+          }
+        }, 300);
+      };
+      window.addEventListener('resize', this.onResize);
     }
 
     handleKey(e) {
@@ -373,7 +429,7 @@
       for (const slab of this.slabs) {
         if (slab.hiddenFromView) continue;
         c.drawImage(slab.canvas, slab.x, slab.y, slab.w, slab.h);
-        const outline = this.phase === 'paint' || (this.phase === 'result' && !slab.found) || slab.found;
+        const outline = (this.phase === 'paint' && slab === this.active) || (this.phase === 'result' && !slab.found) || slab.found;
         if (outline) {
           c.save();
           c.translate(slab.x, slab.y);
@@ -510,6 +566,11 @@
         if (!this.timer) return;
         const left = this.timer.paused != null ? this.timer.deadline - this.timer.paused : this.timer.deadline - performance.now();
         this.setStat('time', L.formatTime(left), left < 10000);
+        const sec = Math.ceil(left / 1000);
+        if (sec !== this.timer.lastSec) {
+          this.timer.lastSec = sec;
+          if (sec > 0 && sec <= 5 && this.phase === 'seek') this.sfx.play('tick');
+        }
         if (left <= 0) {
           const cb = this.timer.onEnd;
           this.stopTimer();
@@ -556,14 +617,18 @@
       }
     }
 
-    hiderBrief() {
+    hiderBrief(hiderNo) {
       this.phase = 'brief';
-      this.slabs = [];
+      this.hiderNo = hiderNo || 1;
+      this.active = null;
+      if (this.hiderNo === 1) this.slabs = [];
       this.markers = [];
       this.hintCircle = null;
       this.render();
       this.tools.hidden = true;
-      this.setHud({ title: '🎨 Hider', sub: 'choose your slab', buttons: [['Quit', () => this.confirmQuit(), 'ghost small']] });
+      const N = this.mode === 'hotseat' ? this.settings.hiders : 1;
+      const who = N > 1 ? `Hider ${this.hiderNo} of ${N}` : 'Hider';
+      this.setHud({ title: `🎨 ${who}`, sub: 'choose your slab', buttons: [['Quit', () => this.confirmQuit(), 'ghost small']] });
       let shape = 'rect', size = 1;
       const shapeRow = el('div', { class: 'choices' });
       const sizeRow = el('div', { class: 'choices' });
@@ -578,13 +643,13 @@
       const body = el('div', {}, [
         el('p', { html: this.mode === 'hide-share'
           ? 'Paint your slab to blend into this page, hide it, then copy the code for a friend who has the <b>same page</b> open.'
-          : `Round ${this.round}. Paint your slab so it disappears into the page, then pass the device to the seeker. Seeker gets <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || '∞'}</b> guesses.` }),
+          : `Round ${this.round}${N > 1 ? ` · ${who}` : ''}. Paint your slab so it disappears into the page${N > 1 ? ' (do not cover another hider\'s slab)' : ''}, then pass the device ${this.hiderNo < N ? 'to the next hider' : 'to the seeker'}. Seeker gets <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || '∞'}</b> guesses${N > 1 ? ` to find all ${N} slabs` : ''}.` }),
         el('div', { class: 'muted', text: 'Shape' }), shapeRow,
         el('div', { class: 'muted', text: 'Size' }), sizeRow,
         el('p', { class: 'muted', html: 'Tools: <b>B</b>rush · <b>E</b>yedropper · <b>S</b>tamp (limited pixel-perfect ink) · <b>F</b>ill · <b>M</b>ove · Ctrl+Z undo' }),
       ]);
       this.showModal({
-        title: this.mode === 'hide-share' ? 'Hide & Share' : `Hide & Seek · Hider`,
+        title: this.mode === 'hide-share' ? 'Hide & Share' : `Hide & Seek · ${who}`,
         bodyEl: body,
         buttons: [['Start painting', () => this.startPaint(shape, size), 'primary'], ['Quit', () => this.destroy(), 'ghost']],
       });
@@ -596,15 +661,17 @@
       const w = Math.round(base), h = Math.round(base * (shape === 'ghost' ? 1.2 : 1));
       const slab = this.makeSlab(0, 0, w, h, shape);
       this.moveSlab(slab, this.vw / 2 - w / 2, this.vh / 2 - h / 2);
-      this.slabs = [slab];
+      slab.hider = this.hiderNo || 1;
+      this.slabs.push(slab);
       this.active = slab;
       this.undo = [];
       this.phase = 'paint';
       this.setTool('brush');
       this.buildTools();
       this.tools.hidden = false;
+      const N = this.mode === 'hotseat' ? this.settings.hiders : 1;
       this.setHud({
-        title: '🎨 Hider',
+        title: N > 1 ? `🎨 Hider ${this.hiderNo} of ${N}` : '🎨 Hider',
         sub: 'paint, drag into place, then hide',
         stats: [
           { key: 'time', label: 'time', value: this.settings.hideTime ? L.formatTime(this.settings.hideTime * 1000) : '—' },
@@ -615,7 +682,7 @@
           ['Quit', () => this.confirmQuit(), 'ghost small'],
         ],
       });
-      this.startTimer(this.settings.hideTime, () => { this.showToast("Time's up - hiding now!", 1800); this.finishHiding(); });
+      this.startTimer(this.settings.hideTime, () => { this.showToast("Time's up - hiding now!", 1800); this.finishHiding(true); });
       this.updateCamo();
       this.render();
     }
@@ -631,27 +698,50 @@
       }, 120);
     }
 
-    finishHiding() {
+    finishHiding(force) {
       if (this.phase !== 'paint') return;
+      const slab = this.active;
+      if (!force && this.slabs.some((o) => o !== slab && L.rectsOverlap(o, slab, 4))) {
+        this.sfx.play('miss');
+        this.showToast("Your slab overlaps another hider's slab - move it somewhere else", 2500);
+        return;
+      }
       this.stopTimer();
       this.tools.hidden = true;
       this.brushPos = null;
-      const slab = this.active;
       slab.camo = this.slabCamo(slab);
-      this.hiderScore = slab.camo;
+      this.hiderScore = Math.max(...this.slabs.map((s) => s.camo || 0));
       this.phase = 'hidden';
+      this.sfx.play('hide');
       this.render();
       if (this.mode === 'hide-share') return this.shareScreen();
+      const N = this.mode === 'hotseat' ? this.settings.hiders : 1;
+      if (this.hiderNo < N) return this.handoffToHider(this.hiderNo + 1);
       this.handoff();
+    }
+
+    handoffToHider(next) {
+      this.phase = 'handoff';
+      this.setHud({ title: '🙈 Pass the device', sub: `hider ${next} is up` });
+      this.showModal({
+        opaque: true,
+        title: `Pass the device to hider ${next}`,
+        body: `<p>Hider ${next - 1} is hidden with a camouflage of <b>${this.active.camo}%</b>.</p><p>Hider ${next}: you will see the earlier slabs on the page. Paint your own and hide it somewhere else.</p>`,
+        buttons: [[`I am hider ${next} - go!`, () => this.hiderBrief(next), 'primary']],
+      });
     }
 
     handoff() {
       this.phase = 'handoff';
       this.setHud({ title: '🙈 Pass the device', sub: 'no peeking' });
+      const many = this.slabs.length > 1;
+      const camoLine = many
+        ? `<p>Camouflage: ${this.slabs.map((s) => `hider ${s.hider} <b>${s.camo}%</b>`).join(' · ')}.</p>`
+        : `<p>The hider scored a camouflage of <b>${this.hiderScore}%</b>.</p>`;
       this.showModal({
         opaque: true,
         title: 'Pass the device to the seeker',
-        body: `<p>The hider scored a camouflage of <b>${this.hiderScore}%</b>.</p><p>Seeker: you have <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || 'unlimited'}</b> guesses to click on the hidden slab. Hints cost 10 seconds.</p>`,
+        body: `${camoLine}<p>Seeker: you have <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || 'unlimited'}</b> guesses to click on ${many ? `all <b>${this.slabs.length}</b> hidden slabs` : 'the hidden slab'}. Hints cost 10 seconds.</p>`,
         buttons: [['I am the seeker - go!', () => this.startSeek(), 'primary']],
       });
     }
@@ -702,7 +792,8 @@
       const hit = this.slabs.find((s) => !s.found && this.hitSlab(s, px, py));
       if (hit) {
         hit.found = true;
-        hit.foundAt = performance.now();
+        hit.foundAt = performance.now() - this.seekStart;
+        this.sfx.play('hit');
         this.markers.push({ x: px, y: py, kind: 'hit' });
         const remaining = this.slabs.filter((s) => !s.found).length;
         if (this.statEls.found) this.setStat('found', `${this.slabs.length - remaining}/${this.slabs.length}`);
@@ -712,9 +803,9 @@
         return;
       }
       this.guessesUsed++;
+      this.sfx.play('miss');
       this.markers.push({ x: px, y: py, kind: 'miss' });
-      const target = this.slabs.find((s) => !s.found);
-      const dist = Math.hypot(target.x + target.w / 2 - px, target.y + target.h / 2 - py);
+      const dist = Math.min(...this.slabs.filter((s) => !s.found).map((s) => Math.hypot(s.x + s.w / 2 - px, s.y + s.h / 2 - py)));
       this.showToast(L.temperatureHint(dist, this.prevDist));
       this.prevDist = dist;
       const left = this.settings.guesses ? this.settings.guesses - this.guessesUsed : Infinity;
@@ -733,19 +824,25 @@
       this.render();
       const elapsed = performance.now() - this.seekStart;
       const score = won ? L.seekScore(msLeft, this.settings.seekTime * 1000, this.guessesUsed + 1, this.settings.guesses, this.hintsUsed) : 0;
-      chrome.runtime.sendMessage({ type: 'HSP_RECORD_STATS', stats: { rounds: 1, found: won ? this.slabs.length : 0, seekMs: won ? Math.round(elapsed) : null, camo: this.hiderScore } }).catch(() => {});
+      const foundCount = this.slabs.filter((s) => s.found).length;
+      this.sfx.play(won ? 'win' : 'lose');
+      safeSend({ type: 'HSP_RECORD_STATS', stats: { rounds: 1, found: foundCount, seekMs: won ? Math.round(elapsed) : null, camo: this.mode === 'seek-code' ? null : this.hiderScore } });
       const sec = (elapsed / 1000).toFixed(1);
+      const many = this.slabs.length > 1;
+      const detail = many
+        ? `<div class="kv">${this.slabs.map((s) => `<span>Hider ${s.hider || '?'} · camo ${s.camo != null ? s.camo + '%' : '?'}</span><b>${s.found ? `found after ${(s.foundAt / 1000).toFixed(1)}s` : 'never found 🏆'}</b>`).join('')}</div>`
+        : '';
       const body = won
-        ? `<div class="big">🎯 Found!</div><div class="kv"><span>Time</span><b>${sec}s</b><span>Wrong guesses</span><b>${this.guessesUsed}</b><span>Seeker score</span><b>${score}</b>${this.hiderScore != null ? `<span>Hider camo</span><b>${this.hiderScore}%</b>` : ''}</div>`
-        : `<div class="big">🫥 Not found</div><p>The slab is outlined in red. ${this.hiderScore != null ? `The hider's camouflage scored <b>${this.hiderScore}%</b>.` : ''}</p>`;
+        ? `<div class="big">🎯 ${many ? 'All found!' : 'Found!'}</div><div class="kv"><span>Time</span><b>${sec}s</b><span>Wrong guesses</span><b>${this.guessesUsed}</b><span>Seeker score</span><b>${score}</b>${!many && this.hiderScore != null ? `<span>Hider camo</span><b>${this.hiderScore}%</b>` : ''}</div>${detail}`
+        : `<div class="big">🫥 ${many ? `Found ${foundCount}/${this.slabs.length}` : 'Not found'}</div><p>${many ? 'Slabs that were never found are' : 'The slab is'} outlined in red. ${!many && this.hiderScore != null ? `The hider's camouflage scored <b>${this.hiderScore}%</b>.` : ''}</p>${detail}`;
       const buttons = [];
       if (this.mode === 'hotseat') {
-        buttons.push(['Swap roles & play again', () => { this.round++; this.hiderBrief(); }, 'primary']);
-        buttons.push(['New snapshot', async () => { this.hideModal(); await this.recapture(); this.round++; this.hiderBrief(); }]);
+        buttons.push(['Swap roles & play again', () => { this.round++; this.hiderBrief(1); }, 'primary']);
+        buttons.push(['New snapshot', async () => { this.hideModal(); await this.recapture(); this.round++; this.hiderBrief(1); }]);
       } else if (this.mode === 'seek-code') {
         buttons.push(['Try another code', () => this.codeEntry(), 'primary']);
       } else {
-        buttons.push(['Play again', () => this.hiderBrief(), 'primary']);
+        buttons.push(['Play again', () => this.hiderBrief(1), 'primary']);
       }
       buttons.push(['Look at the page', () => { this.hideModal(); this.setHud({ title: won ? '🎯 Found' : '🫥 Not found', sub: 'result view', buttons: [['Back', () => this.endSeekModal(body, buttons), 'primary small'], ['Quit', () => this.destroy(), 'ghost small']] }); }]);
       buttons.push(['Quit', () => this.destroy(), 'ghost']);
@@ -773,6 +870,7 @@
         slabs: [{ x: slab.x, y: slab.y, w: slab.w, h: slab.h, shape: slab.shape, img: slab.canvas.toDataURL('image/png') }],
       };
       const code = L.encodeShareCode(level);
+      safeSend({ type: 'HSP_RECORD_STATS', stats: { camo: this.hiderScore } });
       const ta = el('textarea', { class: 'code', readonly: 'readonly' });
       ta.value = code;
       const copy = async () => {
@@ -970,6 +1068,7 @@
         const bonus = 100 + Math.round(this.timeLeft() / 1000) * 3;
         this.roundScore += bonus;
         this.soloScore += bonus;
+        this.sfx.play('hit');
         this.markers.push({ x: px, y: py, kind: 'hit' });
         const found = this.slabs.filter((s) => s.found).length;
         this.setStat('found', `${found}/${this.slabs.length}`);
@@ -981,6 +1080,7 @@
       }
       this.guessesUsed++;
       this.adjustTimer(-3000);
+      this.sfx.play('miss');
       this.markers.push({ x: px, y: py, kind: 'miss' });
       this.showToast('Miss! −3s');
       this.render();
@@ -1000,7 +1100,8 @@
         bonus = Math.round(msLeft / 1000) * 5 + Math.max(0, 50 - this.guessesUsed * 10);
         this.soloScore += bonus;
       }
-      chrome.runtime.sendMessage({ type: 'HSP_RECORD_STATS', stats: { rounds: 1, found, soloScore: this.soloScore, soloRound: won ? this.round : this.round - 1 } }).catch(() => {});
+      this.sfx.play(won ? 'win' : 'lose');
+      safeSend({ type: 'HSP_RECORD_STATS', stats: { rounds: 1, found, soloScore: this.soloScore, soloRound: won ? this.round : this.round - 1 } });
       const body = won
         ? `<div class="big">🦎 All found!</div><div class="kv"><span>Time</span><b>${elapsed}s</b><span>Misses</span><b>${this.guessesUsed}</b><span>Round bonus</span><b>+${bonus}</b><span>Total score</span><b>${this.soloScore}</b></div>`
         : `<div class="big">⏰ Round lost</div><p>You found <b>${found}/${this.slabs.length}</b>. The ones you missed are outlined in red.</p><p>Total score: <b>${this.soloScore}</b></p>`;
@@ -1134,6 +1235,7 @@
       const S = this.S;
       const d = this.ctx.getImageData(Math.round(px * S), Math.round(py * S), 1, 1).data;
       this.setColor(L.rgbToHex(d[0], d[1], d[2]), true);
+      this.sfx.play('pick');
       this.showToast(`Picked ${this.color}`, 700);
     }
 
@@ -1266,6 +1368,8 @@
       clearTimeout(this.camoT);
       clearTimeout(this.toastT);
       window.removeEventListener('keydown', this.onKey, true);
+      window.removeEventListener('resize', this.onResize);
+      clearTimeout(this.resizeT);
       this.host.remove();
       if (current === this) current = null;
     }
