@@ -12,11 +12,30 @@
   const DIFFICULTY = {
     // hueShift in degrees, lightShift in HSL lightness (0..1), noise in RGB units,
     // eye radius in CSS px, srcOffset = how many px the copied pattern is nudged.
-    easy:   { hueShift: 10, lightShift: 0.06, noise: 8, eye: 5, srcOffset: 0, slabScale: 1.25, timePerSlab: 14 },
-    normal: { hueShift: 5,  lightShift: 0.035, noise: 4, eye: 4, srcOffset: 1, slabScale: 1.0,  timePerSlab: 11 },
-    hard:   { hueShift: 2.5, lightShift: 0.018, noise: 2, eye: 3, srcOffset: 2, slabScale: 0.85, timePerSlab: 9 },
-    insane: { hueShift: 1,  lightShift: 0.008, noise: 1, eye: 2, srcOffset: 3, slabScale: 0.7,  timePerSlab: 8 },
+    // wobble = idle 3D tilt amplitude in degrees (see wobbleAngles).
+    easy:   { hueShift: 10, lightShift: 0.06, noise: 8, eye: 5, srcOffset: 0, slabScale: 1.25, timePerSlab: 14, wobble: 20 },
+    normal: { hueShift: 5,  lightShift: 0.035, noise: 4, eye: 4, srcOffset: 1, slabScale: 1.0,  timePerSlab: 11, wobble: 12 },
+    hard:   { hueShift: 2.5, lightShift: 0.018, noise: 2, eye: 3, srcOffset: 2, slabScale: 0.85, timePerSlab: 9, wobble: 6 },
+    insane: { hueShift: 1,  lightShift: 0.008, noise: 1, eye: 2, srcOffset: 3, slabScale: 0.7,  timePerSlab: 8, wobble: 3 },
   };
+
+  // Idle wobble presets (degrees) for hot-seat and share rounds.
+  const WOBBLE = { still: 0, subtle: 6, normal: 12, lively: 20 };
+
+  // Stamp ink presets: fraction of the slab area that may be pixel-copied.
+  const STAMP_INK = { '30': 0.3, '60': 0.6, unlimited: Infinity };
+
+  // A hidden slab is a physical object: it never sits perfectly still. Returns
+  // the tilt around the vertical (ry) and horizontal (rx) axes in radians at
+  // time t (seconds) for a slab with its own phase. Two incommensurate sines
+  // keep the motion irregular; |ry| <= amp, |rx| <= amp / 2.
+  function wobbleAngles(t, phase, ampDeg) {
+    const amp = (ampDeg || 0) * Math.PI / 180;
+    if (!amp) return { ry: 0, rx: 0 };
+    const ry = amp * (0.6 * Math.sin((2 * Math.PI * t) / 3.1 + phase) + 0.4 * Math.sin((2 * Math.PI * t) / 1.7 + 2 * phase));
+    const rx = (amp / 2) * Math.sin((2 * Math.PI * t) / 2.3 + 3 * phase);
+    return { ry, rx };
+  }
 
   function clamp(v, lo, hi) {
     return v < lo ? lo : v > hi ? hi : v;
@@ -271,6 +290,9 @@
   return {
     SHAPES,
     DIFFICULTY,
+    WOBBLE,
+    STAMP_INK,
+    wobbleAngles,
     clamp,
     hexToRgb,
     rgbToHex,

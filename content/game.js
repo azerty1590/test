@@ -213,7 +213,10 @@
   class Game {
     constructor(opts) {
       this.mode = opts.mode;
-      this.settings = Object.assign({ difficulty: 'normal', seekTime: 45, guesses: 3, hideTime: 90, hiders: 1, sound: true }, opts.settings || {});
+      this.settings = Object.assign({ difficulty: 'normal', seekTime: 45, guesses: 3, hideTime: 90, hiders: 1, sound: true, wobble: 'normal', stampInk: 'unlimited' }, opts.settings || {});
+      this.inkRatio = L.STAMP_INK[this.settings.stampInk] != null ? L.STAMP_INK[this.settings.stampInk] : Infinity;
+      this.wobbleAmp = 0;
+      this.previewWobble = false;
       this.settings.hiders = L.clamp(Number(this.settings.hiders) || 1, 1, 3);
       this.sfx = new Sfx(this.settings.sound !== false);
       this.vw = window.innerWidth;
@@ -366,6 +369,11 @@
       this.bg.height = img.height;
       this.bgCtx = this.bg.getContext('2d', { willReadFrequently: true });
       this.bgCtx.drawImage(img, 0, 0);
+      // GPU-friendly copy for per-frame drawing; bgCtx stays CPU-backed for reads.
+      this.bgGpu = document.createElement('canvas');
+      this.bgGpu.width = this.bg.width;
+      this.bgGpu.height = this.bg.height;
+      this.bgGpu.getContext('2d').drawImage(img, 0, 0);
       if (img.close) img.close();
       this.board.width = this.bg.width;
       this.board.height = this.bg.height;
@@ -400,7 +408,11 @@
       canvas.width = Math.max(1, Math.round(w * S));
       canvas.height = Math.max(1, Math.round(h * S));
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      const slab = { x, y, w, h, shape, canvas, ctx, path: shapePath(shape, w, h), found: false, ink: 0, inkMax: 0 };
+      const slab = {
+        x, y, w, h, shape, canvas, ctx, path: shapePath(shape, w, h), found: false, ink: 0, inkMax: 0,
+        phase: Math.random() * Math.PI * 2,
+        depth: L.clamp(Math.min(w, h) * 0.08, 4, 12),
+      };
       this.resetSlabPaint(slab);
       return slab;
     }
@@ -418,7 +430,7 @@
       c.fillStyle = 'rgba(255,255,255,.06)';
       for (let i = 0; i < 40; i++) c.fillRect(Math.random() * slab.w, Math.random() * slab.h, 2, 2);
       c.restore();
-      slab.inkMax = Math.round(slab.w * slab.h * 0.3);
+      slab.inkMax = this.inkRatio === Infinity ? Infinity : Math.round(slab.w * slab.h * this.inkRatio);
       slab.ink = slab.inkMax;
     }
 
@@ -437,7 +449,8 @@
       ctx.restore();
       const cx = slab.x + slab.w / 2, cy = slab.y + slab.h / 2;
       Object.assign(slab, { canvas, ctx, path, w, h });
-      slab.inkMax = Math.round(w * h * 0.3);
+      slab.inkMax = this.inkRatio === Infinity ? Infinity : Math.round(w * h * this.inkRatio);
+      slab.depth = L.clamp(Math.min(w, h) * 0.08, 4, 12);
       slab.ink = Math.min(slab.ink, slab.inkMax);
       this.moveSlab(slab, cx - w / 2, cy - h / 2);
     }
@@ -492,16 +505,61 @@
       this.startFx();
     }
 
+    // True while something on the board moves on its own (reveal flips, the
+    // result pulse, or hidden slabs idling in 3D).
+    needsAnimation() {
+      if (this.fx.length || this.phase === 'result') return true;
+      if (this.phase === 'seek' && this.wobbleAmp > 0 && this.slabs.some((s) => !s.found)) return true;
+      if (this.phase === 'paint' && this.previewWobble && this.active) return true;
+      return false;
+    }
+
     startFx() {
       if (this.fxRaf) return;
-      const loop = () => {
+      let last = 0;
+      const loop = (ts) => {
         this.fxRaf = 0;
         const now = performance.now();
         this.fx = this.fx.filter((f) => now - f.t0 < f.dur);
-        this.render();
-        if (this.fx.length || this.phase === 'result') this.fxRaf = requestAnimationFrame(loop);
+        // ~30 fps is plenty for a slow wobble and keeps 4K boards cheap.
+        if (ts - last >= 30 || this.fx.length) { last = ts; this.render(); }
+        if (this.needsAnimation()) this.fxRaf = requestAnimationFrame(loop);
       };
       this.fxRaf = requestAnimationFrame(loop);
+    }
+
+    // Wobble amplitude for a slab right now (degrees), 0 when it should sit still.
+    slabWobble(slab) {
+      if (slab.found) return 0;
+      if (this.phase === 'seek') return this.wobbleAmp;
+      if (this.phase === 'paint' && this.previewWobble && slab === this.active) return Math.max(this.wobbleAmp, L.WOBBLE[this.settings.wobble] || 0);
+      return 0;
+    }
+
+    // Draws a slab as a thin 3D object tilted by (ry, rx). The front face is the
+    // painted canvas; the back face is bare concrete and peeks out at the edges
+    // that turn towards the viewer, together with a sliding drop shadow.
+    drawSlab3D(c, slab, ry, rx) {
+      const cosY = Math.cos(ry), sinY = Math.sin(ry), cosX = Math.cos(rx), sinX = Math.sin(rx);
+      const d = slab.depth;
+      c.save();
+      c.translate(slab.x + slab.w / 2, slab.y + slab.h / 2);
+      c.scale(cosY, cosX);
+      c.translate(-slab.w / 2, -slab.h / 2);
+      c.save();
+      c.translate((-d * sinY) / cosY, (d * sinX) / cosX);
+      c.shadowColor = 'rgba(0,0,0,.35)';
+      c.shadowBlur = 5;
+      c.shadowOffsetX = -sinY * 6;
+      c.shadowOffsetY = sinX * 6 + 1;
+      const g = c.createLinearGradient(0, 0, 0, slab.h);
+      g.addColorStop(0, '#a3a8b0');
+      g.addColorStop(1, '#4a4f57');
+      c.fillStyle = g;
+      c.fill(slab.path);
+      c.restore();
+      c.drawImage(slab.canvas, 0, 0, slab.w, slab.h);
+      c.restore();
     }
 
     // ---------- rendering ----------
@@ -511,7 +569,7 @@
       const S = this.S;
       c.setTransform(S, 0, 0, S, 0, 0);
       c.clearRect(0, 0, this.vw, this.vh);
-      c.drawImage(this.bg, 0, 0, this.vw, this.vh);
+      c.drawImage(this.bgGpu || this.bg, 0, 0, this.vw, this.vh);
       const now = performance.now();
       for (const slab of this.slabs) {
         if (slab.hiddenFromView) continue;
@@ -537,7 +595,13 @@
           c.restore();
           continue;
         }
-        c.drawImage(slab.canvas, slab.x, slab.y, slab.w, slab.h);
+        const amp = this.slabWobble(slab);
+        if (amp > 0) {
+          const a = L.wobbleAngles(now / 1000, slab.phase, amp);
+          this.drawSlab3D(c, slab, a.ry, a.rx);
+        } else {
+          c.drawImage(slab.canvas, slab.x, slab.y, slab.w, slab.h);
+        }
         const outline = (this.phase === 'paint' && slab === this.active) || (this.phase === 'result' && !slab.found) || slab.found;
         if (outline) {
           c.save();
@@ -757,7 +821,8 @@
           : `Round ${this.round}${N > 1 ? ` · ${who}` : ''}. Paint your slab so it disappears into the page${N > 1 ? ' (do not cover another hider\'s slab)' : ''}, then pass the device ${this.hiderNo < N ? 'to the next hider' : 'to the seeker'}. Seeker gets <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || '∞'}</b> guesses${N > 1 ? ` to find all ${N} slabs` : ''}.` }),
         el('div', { class: 'muted', text: 'Shape' }), shapeRow,
         el('div', { class: 'muted', text: 'Size' }), sizeRow,
-        el('p', { class: 'muted', html: 'Tools: <b>B</b>rush · <b>E</b>yedropper · <b>S</b>tamp (limited pixel-perfect ink) · <b>F</b>ill · <b>M</b>ove · Ctrl+Z undo' }),
+        el('p', { class: 'muted', html: `Tools: <b>B</b>rush · <b>E</b>yedropper · <b>S</b>tamp (${this.inkRatio === Infinity ? 'copies the page behind the slab' : `pixel-perfect ink for ${Math.round(this.inkRatio * 100)}% of the slab`}) · <b>F</b>ill · <b>M</b>ove · Ctrl+Z undo` }),
+        el('p', { class: 'muted', html: (L.WOBBLE[this.settings.wobble] || 0) > 0 ? 'Your slab is a real object: while the seeker looks, it idles and tilts a little, and its bare concrete edges peek out. Perfect paint helps, a good spot helps more.' : 'Wobble is off: hidden slabs sit perfectly still.' }),
       ]);
       this.showModal({
         title: this.mode === 'hide-share' ? 'Hide & Share' : `Hide & Seek · ${who}`,
@@ -859,7 +924,7 @@
       this.showModal({
         opaque: true,
         title: 'Pass the device to the seeker',
-        body: `${camoLine}${this.slabs.some((s) => s.flat) ? '<p>⚠️ A slab is hiding on a flat area of the page, so the seeker starts with a free hint circle for it.</p>' : ''}<p>Seeker: you have <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || 'unlimited'}</b> guesses to click on ${many ? `all <b>${this.slabs.length}</b> hidden slabs` : 'the hidden slab'}. Hints cost 10 seconds.</p>`,
+        body: `${camoLine}${this.slabs.some((s) => s.flat) ? '<p>⚠️ A slab is hiding on a flat area of the page, so the seeker starts with a free hint circle for it.</p>' : ''}<p>Seeker: you have <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || 'unlimited'}</b> guesses to click on ${many ? `all <b>${this.slabs.length}</b> hidden slabs` : 'the hidden slab'}. ${(L.WOBBLE[this.settings.wobble] || 0) > 0 ? 'Watch for movement: a slab is a real object and its bare edges show when it shifts.' : 'The slabs sit perfectly still.'} Hints cost 10 seconds.</p>`,
         buttons: [['I am the seeker - go!', () => this.startSeek(), 'primary']],
       });
     }
@@ -874,6 +939,8 @@
       this.prevDist = null;
       this.seekStart = performance.now();
       this.board.className = 'board seek';
+      this.wobbleAmp = this.levelWobble != null ? this.levelWobble : (L.WOBBLE[this.settings.wobble] != null ? L.WOBBLE[this.settings.wobble] : L.WOBBLE.normal);
+      this.startFx();
       const total = this.slabs.length;
       this.setHud({
         title: '🔍 Seeker',
@@ -996,6 +1063,7 @@
         t: Date.now(),
         seekTime: this.settings.seekTime,
         guesses: this.settings.guesses,
+        wobble: this.settings.wobble,
         camo: this.hiderScore,
         slabs: [{ x: slab.x, y: slab.y, w: slab.w, h: slab.h, shape: slab.shape, camo: slab.camo, img: slab.canvas.toDataURL('image/png') }],
       };
@@ -1083,6 +1151,7 @@
       this.hiderScore = level.camo != null ? level.camo : null;
       if (level.seekTime) this.settings.seekTime = level.seekTime;
       if (level.guesses != null) this.settings.guesses = level.guesses;
+      this.levelWobble = L.WOBBLE[level.wobble] != null ? L.WOBBLE[level.wobble] : null;
       let warn = '';
       try {
         const u = new URL(level.url);
@@ -1138,6 +1207,8 @@
       this.hintsUsed = 0;
       this.seekStart = performance.now();
       this.board.className = 'board seek';
+      this.wobbleAmp = diff.wobble;
+      this.startFx();
       this.setHud({
         title: '🦎 Chameleon Hunt',
         sub: `round ${this.round} · ${this.settings.difficulty}`,
@@ -1299,6 +1370,11 @@
         el('div', { class: 'sep' }),
         el('button', { class: 'btn small', text: '↶ Undo', title: 'Ctrl+Z', onclick: () => this.doUndo() }),
         el('button', { class: 'btn small ghost', text: 'Reset', onclick: () => { this.pushUndo(); this.resetSlabPaint(this.active); this.updateCamo(); this.render(); } }),
+        el('button', { class: 'btn small ghost', text: '🎲 Preview', title: 'Preview how your slab wobbles while the seeker looks for it', onclick: (e) => {
+          this.previewWobble = !this.previewWobble;
+          e.currentTarget.classList.toggle('primary', this.previewWobble);
+          if (this.previewWobble) this.startFx(); else this.render();
+        } }),
         el('button', { class: 'btn small ghost', text: '⇅', title: 'Move toolbar to the top/bottom', onclick: () => t.classList.toggle('top') }),
       );
       this.renderSwatches();
@@ -1346,7 +1422,8 @@
 
     updateInk() {
       if (!this.inkBar || !this.active) return;
-      const pct = this.active.inkMax ? (this.active.ink / this.active.inkMax) * 100 : 0;
+      const pct = this.active.inkMax === Infinity ? 100 : this.active.inkMax ? (this.active.ink / this.active.inkMax) * 100 : 0;
+      this.inkBar.parentElement.hidden = this.active.inkMax === Infinity;
       this.inkBar.style.width = pct + '%';
       const stampBtn = this.tools.querySelector('[data-tool=stamp]');
       if (stampBtn) stampBtn.disabled = this.active.ink <= 0;

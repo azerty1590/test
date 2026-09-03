@@ -140,3 +140,22 @@ test('planPlacements prefers busy spots when a rate function is given', () => {
   const allFlat = L.planPlacements(3, vw, vh, { random: L.mulberry32(5), rate: () => 0 });
   assert.equal(allFlat.length, 3, 'flat pages still get placements');
 });
+
+test('wobbleAngles stays within its amplitude, varies over time and is zero when still', () => {
+  assert.deepEqual(L.wobbleAngles(1.5, 0.3, 0), { ry: 0, rx: 0 });
+  const amp = 12 * Math.PI / 180;
+  let maxRy = 0, maxRx = 0, distinct = new Set();
+  for (let t = 0; t < 20; t += 0.05) {
+    const a = L.wobbleAngles(t, 1.1, 12);
+    maxRy = Math.max(maxRy, Math.abs(a.ry));
+    maxRx = Math.max(maxRx, Math.abs(a.rx));
+    distinct.add(a.ry.toFixed(4));
+  }
+  assert.ok(maxRy <= amp + 1e-9 && maxRx <= amp / 2 + 1e-9);
+  assert.ok(maxRy > amp * 0.7, 'reaches most of its amplitude');
+  assert.ok(distinct.size > 300, 'motion is not repetitive');
+  assert.notDeepEqual(L.wobbleAngles(3, 0, 12), L.wobbleAngles(3, 2, 12), 'phase makes slabs move differently');
+  assert.equal(L.STAMP_INK.unlimited, Infinity);
+  assert.equal(L.WOBBLE.still, 0);
+  for (const d of Object.values(L.DIFFICULTY)) assert.ok(d.wobble > 0);
+});

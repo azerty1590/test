@@ -21,6 +21,10 @@ Turn **any web page** into a hide-and-seek arena. A hider gets a blank grey slab
 
 Seekers get a countdown, limited guesses, warmer/colder feedback, and a hint button that costs 10 seconds. Short synthesised sound cues can be turned off in the popup.
 
+## Volume and wobble
+
+Paint can hide a player completely: with the default **Stamp ink: Unlimited** a patient hider can copy the page pixel for pixel. What gives a hidden slab away is that it is a physical object. While the seeker looks, every hidden slab idles and tilts a little in 3D, so its bare concrete back face and a sliding shadow peek out at the edges that turn towards you. The **Wobble** setting (Still, Subtle, Normal, Lively) sets how much they move in hot-seat and shared rounds, the solo hunt scales it with difficulty, and a hider can press **Preview** in the toolbar to watch their own slab wobble before committing. Wobble is drawn on the canvas with a compressed front face and an offset back face, so it costs nothing beyond a 30 fps redraw.
+
 ## Built for big, flat sites
 
 Real pages are not textured walls. Wikipedia and Reddit are mostly empty white or dark space, YouTube and Facebook are grids of thumbnails on flat backgrounds, and all of them ship strict Content Security Policies, top-layer dialogs and aggressive keyboard handlers. The extension is tuned for that:
@@ -30,7 +34,7 @@ Real pages are not textured walls. Wikipedia and Reddit are mostly empty white o
 - **CSP-proof.** Styles are applied with a constructed stylesheet and images are decoded with `createImageBitmap`, neither of which a page's `style-src` or `img-src` policy can block.
 - **Top layer.** The overlay opens as a manual popover, so cookie walls, `<dialog>`s and video controls cannot sit on top of it.
 - **Hi-DPI performance.** The arena canvas stays GPU-backed; all pixel reads go to the snapshot and slab canvases, so 4K displays at 2x scale paint smoothly.
-- **A little 3D.** Found slabs pop out and flip once with a drop shadow, and unfound slabs pulse on the result screen. Cheap, canvas-only, no library.
+- **A little 3D.** Hidden slabs idle in 3D (see above), found slabs pop out and flip once with a drop shadow, and unfound slabs pulse on the result screen. Cheap, canvas-only, no library.
 
 ## Install (unpacked)
 

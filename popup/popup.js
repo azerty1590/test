@@ -1,7 +1,7 @@
 const $ = (sel) => document.querySelector(sel);
 const statusEl = $('#status');
 const buttons = [...document.querySelectorAll('.mode')];
-const settingIds = ['difficulty', 'seekTime', 'guesses', 'hideTime', 'hiders', 'sound'];
+const settingIds = ['difficulty', 'seekTime', 'guesses', 'hideTime', 'hiders', 'wobble', 'stampInk', 'sound'];
 
 function showStatus(text, ok) {
   statusEl.textContent = text;
@@ -18,6 +18,8 @@ function readSettings() {
     guesses: Number(s.guesses),
     hideTime: Number(s.hideTime),
     hiders: Number(s.hiders),
+    wobble: s.wobble,
+    stampInk: s.stampInk,
     sound: s.sound !== 'off',
   };
 }

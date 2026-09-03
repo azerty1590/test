@@ -208,11 +208,16 @@ async function main() {
     await page.waitForTimeout(250);
     const afterBrush = await g(() => window.__HSP__.game.slabs[0].camo);
     assert.ok(typeof afterBrush === 'number');
-    // Stamp uses ink.
+    // Stamp is unlimited by default: the meter is hidden and ink never runs out.
     await page.keyboard.press('s');
     await page.mouse.move(cx - 20, cy - 20); await page.mouse.down(); await page.mouse.move(cx + 20, cy + 20, { steps: 6 }); await page.mouse.up();
-    const ink = await g(() => { const s = window.__HSP__.game.slabs[0]; return { ink: s.ink, max: s.inkMax }; });
-    assert.ok(ink.ink < ink.max, 'stamp consumed ink');
+    const ink = await g(() => { const s = window.__HSP__.game.slabs[0]; return { unlimited: s.inkMax === Infinity && s.ink === Infinity, meterHidden: document.querySelector('#hsp-host').shadowRoot.querySelector('.ink').hidden }; });
+    assert.deepEqual(ink, { unlimited: true, meterHidden: true }, 'unlimited ink by default, meter hidden');
+    // Preview toggle animates the active slab while painting.
+    await clickBtn('Preview');
+    assert.ok(await g(() => window.__HSP__.game.previewWobble && window.__HSP__.game.fxRaf > 0), 'preview wobble running');
+    await clickBtn('Preview');
+    assert.equal(await g(() => window.__HSP__.game.previewWobble), false);
     // Fill with the picked colour then undo restores previous pixels.
     await g(() => window.__HSP__.game.setColor('#00ff00', true));
     await page.keyboard.press('f');
@@ -238,6 +243,19 @@ async function main() {
     await page.waitForFunction(() => window.__HSP__.game.phase === 'seek');
     assert.equal(await g(() => window.__HSP__.game.slabs[0].flat), false, 'stripes are a busy spot');
     assert.equal(await g(() => window.__HSP__.game.hintCircle), null, 'no free hint on a busy spot');
+    // The hidden slab idles in 3D: the animation loop runs and the board changes over time.
+    assert.equal(await g(() => window.__HSP__.game.wobbleAmp), 12);
+    assert.ok(await g(() => window.__HSP__.game.fxRaf > 0), 'wobble animation loop is running');
+    // Background tabs get their animation frames throttled, so drive the renderer directly at two moments
+    // and compare the whole block around the slab in-page (the tilt shows on different edges over time).
+    await page.bringToFront();
+    await g(() => { const gm = window.__HSP__.game, s = gm.slabs[0], S = gm.S; gm.render(); window.__p1 = gm.ctx.getImageData(Math.round((s.x - 12) * S), Math.round((s.y - 12) * S), Math.round((s.w + 24) * S), Math.round((s.h + 24) * S)).data; });
+    let changed = 0;
+    for (let i = 0; i < 8 && changed < 50; i++) {
+      await page.waitForTimeout(300);
+      changed = await g(() => { const gm = window.__HSP__.game, s = gm.slabs[0], S = gm.S; gm.render(); const d = gm.ctx.getImageData(Math.round((s.x - 12) * S), Math.round((s.y - 12) * S), Math.round((s.w + 24) * S), Math.round((s.h + 24) * S)).data; let n = 0; for (let k = 0; k < d.length; k++) if (d[k] !== window.__p1[k]) n++; return n; });
+    }
+    assert.ok(changed >= 50, `slab pixels change while it wobbles (${changed} changed)`);
     await shot('hotseat-seek.png');
     await page.mouse.click(100, 700); // miss
     assert.equal(await g(() => window.__HSP__.game.guessesUsed), 1);
@@ -252,6 +270,21 @@ async function main() {
     await shot('hotseat-result.png');
     await clickBtn('Swap roles');
     await page.waitForFunction(() => window.__HSP__.game.round === 2 && window.__HSP__.game.phase === 'brief');
+  });
+
+  await step('limited stamp ink is consumed and the meter shows', async () => {
+    await start('hotseat', { difficulty: 'normal', seekTime: 45, guesses: 3, hideTime: 0, stampInk: '30', wobble: 'still', sound: false });
+    await clickBtn('Start painting');
+    const s = await g(() => { const s = window.__HSP__.game.active; return { x: s.x, y: s.y, w: s.w, h: s.h, ink: s.ink, max: s.inkMax }; });
+    assert.equal(s.max, Math.round(s.w * s.h * 0.3));
+    await page.keyboard.press('s');
+    await page.mouse.move(s.x + 10, s.y + 10); await page.mouse.down(); await page.mouse.move(s.x + s.w - 10, s.y + s.h - 10, { steps: 10 }); await page.mouse.up();
+    const after = await g(() => window.__HSP__.game.active.ink);
+    assert.ok(after < s.ink, 'stamp consumed ink');
+    await clickBtn('Hide it!');
+    await clickBtn('I am the seeker');
+    assert.equal(await g(() => window.__HSP__.game.wobbleAmp), 0, 'still setting disables wobble');
+    assert.equal(await g(() => window.__HSP__.game.fxRaf), 0, 'no animation loop when still');
   });
 
   await step('hotseat with 2 hiders: overlap is refused, seeker must find both, per-hider results', async () => {
@@ -329,6 +362,7 @@ async function main() {
     assert.equal(level.slabs.length, 1);
     assert.equal(level.slabs[0].shape, 'ghost');
     assert.equal(level.seekTime, 30);
+    assert.equal(level.wobble, 'normal');
     await shot('share.png');
   });
 
