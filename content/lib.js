@@ -117,31 +117,84 @@
     };
   }
 
+  // Visual "busyness" of an RGBA region (0 flat .. ~1 very detailed): luminance
+  // standard deviation plus horizontal gradient energy. Flat pages such as a
+  // Wikipedia margin or a Reddit background score close to 0; thumbnails and
+  // text score high. `stride` skips pixels for speed.
+  function busyness(data, w, h, stride) {
+    stride = Math.max(1, stride || 2);
+    let n = 0, sum = 0, sum2 = 0, grad = 0, gn = 0;
+    for (let y = 0; y < h; y += stride) {
+      let prev = -1;
+      for (let x = 0; x < w; x += stride) {
+        const i = (y * w + x) * 4;
+        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        sum += lum;
+        sum2 += lum * lum;
+        n++;
+        if (prev >= 0) { grad += Math.abs(lum - prev); gn++; }
+        prev = lum;
+      }
+    }
+    if (!n) return 0;
+    const mean = sum / n;
+    const sd = Math.sqrt(Math.max(0, sum2 / n - mean * mean));
+    const g = gn ? grad / gn : 0;
+    return clamp((sd / 60) * 0.6 + (g / 25) * 0.4, 0, 1);
+  }
+
+  // Below this a spot counts as "flat": hiding there hands the seeker a free hint.
+  const FLAT_THRESHOLD = 0.08;
+
+  function spotLabel(busy) {
+    if (busy < FLAT_THRESHOLD) return 'flat';
+    if (busy < 0.3) return 'ok';
+    return 'busy';
+  }
+
   function rectsOverlap(a, b, pad) {
     pad = pad || 0;
     return !(a.x + a.w + pad <= b.x || b.x + b.w + pad <= a.x || a.y + a.h + pad <= b.y || b.y + b.h + pad <= a.y);
   }
 
   // Choose non-overlapping placements for `count` slabs inside a viewport,
-  // keeping a margin away from the HUD at the top.
+  // keeping a margin away from the HUD at the top. When `opts.rate(cand)` is
+  // given it scores candidate spots (0..1, see busyness) and busy spots are
+  // preferred; flat spots are used only when nothing else is available.
   function planPlacements(count, vw, vh, opts) {
     opts = opts || {};
     const rnd = opts.random || Math.random;
     const scale = opts.scale || 1;
     const top = opts.topMargin != null ? opts.topMargin : 64;
+    const rate = typeof opts.rate === 'function' ? opts.rate : null;
+    const want = rate ? (opts.candidates || 16) : 1;
     const base = clamp(Math.min(vw, vh) * 0.11, 48, 140) * scale;
     const out = [];
     for (let i = 0; i < count; i++) {
-      let placed = null;
-      for (let attempt = 0; attempt < 200 && !placed; attempt++) {
+      const cands = [];
+      for (let attempt = 0; attempt < 200 && cands.length < want; attempt++) {
         const w = Math.round(base * (0.75 + rnd() * 0.6));
         const h = Math.round(base * (0.75 + rnd() * 0.6));
         const x = Math.round(8 + rnd() * Math.max(1, vw - w - 16));
         const y = Math.round(top + rnd() * Math.max(1, vh - h - top - 8));
         const cand = { x, y, w, h, shape: SHAPES[Math.floor(rnd() * SHAPES.length)] };
-        if (!out.some((o) => rectsOverlap(o, cand, 12))) placed = cand;
+        if (!out.some((o) => rectsOverlap(o, cand, 12))) cands.push(cand);
       }
-      if (placed) out.push(placed);
+      if (!cands.length) continue;
+      let pick = cands[0];
+      if (rate) {
+        for (const c of cands) c.busy = clamp(Number(rate(c)) || 0, 0, 1);
+        const good = cands.filter((c) => c.busy >= FLAT_THRESHOLD);
+        const pool = good.length ? good : cands;
+        const weight = (c) => 0.05 + c.busy;
+        let r = rnd() * pool.reduce((a, c) => a + weight(c), 0);
+        pick = pool[pool.length - 1];
+        for (const c of pool) {
+          r -= weight(c);
+          if (r <= 0) { pick = c; break; }
+        }
+      }
+      out.push(pick);
     }
     return out;
   }
@@ -226,6 +279,9 @@
     rgbToHsl,
     hslToRgb,
     mulberry32,
+    busyness,
+    FLAT_THRESHOLD,
+    spotLabel,
     rectsOverlap,
     planPlacements,
     encodeShareCode,

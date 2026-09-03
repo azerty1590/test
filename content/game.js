@@ -228,6 +228,8 @@
       this.opacity = 1;
       this.recent = [];
       this.undo = [];
+      this.fx = [];
+      this.fxRaf = 0;
       this.round = 1;
       this.soloScore = 0;
       this.timer = null;
@@ -242,9 +244,19 @@
     // ---------- DOM ----------
     buildDom() {
       this.host = el('div', { id: 'hsp-host', tabindex: '-1' });
-      this.host.style.cssText = `position:fixed;inset:0;z-index:${ZMAX};`;
+      // Inline styles beat the popover UA stylesheet (margin:auto, borders, fit-content sizing).
+      this.host.style.cssText = `position:fixed;inset:0;z-index:${ZMAX};margin:0;padding:0;border:0;width:auto;height:auto;max-width:none;max-height:none;background:transparent;overflow:visible;`;
       this.shadow = this.host.attachShadow({ mode: 'open' });
-      const style = el('style', { text: CSS });
+      // A constructed stylesheet is CSSOM, so a strict page CSP (YouTube, Facebook,
+      // Reddit) cannot block it the way it can block an inline <style> element.
+      let styled = false;
+      try {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(CSS);
+        this.shadow.adoptedStyleSheets = [sheet];
+        styled = true;
+      } catch { /* fall back below */ }
+      if (!styled) this.shadow.append(el('style', { text: CSS }));
       this.root = el('div', { class: 'root' });
       this.board = el('canvas', { class: 'board' });
       this.hud = el('div', { class: 'hud' });
@@ -254,9 +266,48 @@
       this.modalWrap.hidden = true;
       this.toast = el('div', { class: 'toast' });
       this.root.append(this.board, this.hud, this.tools, this.toast, this.modalWrap);
-      this.shadow.append(style, this.root);
+      this.shadow.append(this.root);
       document.documentElement.append(this.host);
+      this.setOverlayVisible(true);
       this.host.focus();
+    }
+
+    // Uses the Popover API to put the overlay in the browser's top layer, above
+    // site <dialog>s, cookie walls and video controls that out-rank any z-index.
+    setOverlayVisible(visible) {
+      const h = this.host;
+      if (visible) {
+        h.style.display = '';
+        try {
+          if (typeof h.showPopover === 'function') {
+            if (!h.hasAttribute('popover')) h.setAttribute('popover', 'manual');
+            if (!h.matches(':popover-open')) h.showPopover();
+          }
+        } catch { /* z-index fallback */ }
+      } else {
+        try { if (typeof h.hidePopover === 'function' && h.matches(':popover-open')) h.hidePopover(); } catch { /* ignore */ }
+        h.style.display = 'none';
+      }
+    }
+
+    // Decodes a data: URL without an <img> element, so a page's img-src CSP
+    // cannot block the snapshot. Falls back to <img> on old browsers.
+    async decodeImage(dataUrl) {
+      const m = /^data:([^;,]+);base64,([\s\S]*)$/.exec(dataUrl || '');
+      if (m && typeof createImageBitmap === 'function') {
+        try {
+          const bin = atob(m[2]);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          return await createImageBitmap(new Blob([bytes], { type: m[1] }));
+        } catch { /* fall through */ }
+      }
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Image failed to decode'));
+        img.src = dataUrl;
+      });
     }
 
     bindEvents() {
@@ -302,31 +353,32 @@
     }
 
     // ---------- snapshot ----------
-    loadScreenshot(dataUrl) {
-      return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => {
-          this.S = img.width / this.vw;
-          this.bg = document.createElement('canvas');
-          this.bg.width = img.width;
-          this.bg.height = img.height;
-          this.bgCtx = this.bg.getContext('2d', { willReadFrequently: true });
-          this.bgCtx.drawImage(img, 0, 0);
-          this.board.width = img.width;
-          this.board.height = img.height;
-          this.board.style.width = this.vw + 'px';
-          this.board.style.height = this.vh + 'px';
-          this.ctx = this.board.getContext('2d', { willReadFrequently: true });
-          this.render();
-          resolve();
-        };
-        img.onerror = () => reject(new Error('Snapshot image failed to decode'));
-        img.src = dataUrl;
-      });
+    async loadScreenshot(dataUrl) {
+      let img;
+      try {
+        img = await this.decodeImage(dataUrl);
+      } catch {
+        throw new Error('Snapshot image failed to decode');
+      }
+      this.S = img.width / this.vw;
+      this.bg = document.createElement('canvas');
+      this.bg.width = img.width;
+      this.bg.height = img.height;
+      this.bgCtx = this.bg.getContext('2d', { willReadFrequently: true });
+      this.bgCtx.drawImage(img, 0, 0);
+      if (img.close) img.close();
+      this.board.width = this.bg.width;
+      this.board.height = this.bg.height;
+      this.board.style.width = this.vw + 'px';
+      this.board.style.height = this.vh + 'px';
+      // GPU-backed: every pixel read goes to the bg or slab canvases, so a 4K
+      // hi-DPI board stays smooth while painting.
+      this.ctx = this.board.getContext('2d');
+      this.render();
     }
 
     async recapture() {
-      this.host.style.display = 'none';
+      this.setOverlayVisible(false);
       await new Promise((r) => setTimeout(r, 120));
       try {
         const res = await chrome.runtime.sendMessage({ type: 'HSP_CAPTURE' });
@@ -337,7 +389,7 @@
       } catch (e) {
         this.showToast('Snapshot failed: ' + e.message, 3000);
       } finally {
-        this.host.style.display = '';
+        this.setOverlayVisible(true);
       }
     }
 
@@ -418,6 +470,40 @@
       return L.camoScore(sd, bd);
     }
 
+    slabBusyness(slab) {
+      const S = this.S;
+      const W = slab.canvas.width, H = slab.canvas.height;
+      const bd = this.bgCtx.getImageData(Math.round(slab.x * S), Math.round(slab.y * S), W, H).data;
+      return L.busyness(bd, W, H, Math.max(1, Math.round(S * 2)));
+    }
+
+    regionBusyness(x, y, w, h) {
+      const S = this.S;
+      const W = Math.max(1, Math.round(w * S)), H = Math.max(1, Math.round(h * S));
+      const bd = this.bgCtx.getImageData(Math.round(x * S), Math.round(y * S), W, H).data;
+      return L.busyness(bd, W, H, Math.max(1, Math.round(S * 2)));
+    }
+
+    // ---------- reveal effects ----------
+    // A cheap "3D" flip: the found slab pops out of the page and spins once
+    // around its vertical axis with a drop shadow, then settles back.
+    revealSlab(slab) {
+      this.fx.push({ slab, t0: performance.now(), dur: 750 });
+      this.startFx();
+    }
+
+    startFx() {
+      if (this.fxRaf) return;
+      const loop = () => {
+        this.fxRaf = 0;
+        const now = performance.now();
+        this.fx = this.fx.filter((f) => now - f.t0 < f.dur);
+        this.render();
+        if (this.fx.length || this.phase === 'result') this.fxRaf = requestAnimationFrame(loop);
+      };
+      this.fxRaf = requestAnimationFrame(loop);
+    }
+
     // ---------- rendering ----------
     render() {
       const c = this.ctx;
@@ -426,8 +512,31 @@
       c.setTransform(S, 0, 0, S, 0, 0);
       c.clearRect(0, 0, this.vw, this.vh);
       c.drawImage(this.bg, 0, 0, this.vw, this.vh);
+      const now = performance.now();
       for (const slab of this.slabs) {
         if (slab.hiddenFromView) continue;
+        const fx = this.fx.find((f) => f.slab === slab);
+        if (fx) {
+          const t = L.clamp((now - fx.t0) / fx.dur, 0, 1);
+          const ease = 1 - Math.pow(1 - t, 3);
+          const sx = Math.cos(ease * Math.PI * 2);
+          const lift = Math.sin(Math.PI * t) * 0.35;
+          c.save();
+          c.translate(slab.x + slab.w / 2, slab.y + slab.h / 2);
+          c.shadowColor = 'rgba(0,0,0,.55)';
+          c.shadowBlur = 40 * lift + 4;
+          c.shadowOffsetY = 30 * lift + 2;
+          c.scale(Math.max(0.02, Math.abs(sx)) * (1 + lift), 1 + lift);
+          c.drawImage(slab.canvas, -slab.w / 2, -slab.h / 2, slab.w, slab.h);
+          c.shadowColor = 'transparent';
+          c.translate(-slab.w / 2, -slab.h / 2);
+          if (sx < 0) { c.fillStyle = 'rgba(20,22,30,.75)'; c.fill(slab.path); }
+          c.lineWidth = 3;
+          c.strokeStyle = '#7cf2a7';
+          c.stroke(slab.path);
+          c.restore();
+          continue;
+        }
         c.drawImage(slab.canvas, slab.x, slab.y, slab.w, slab.h);
         const outline = (this.phase === 'paint' && slab === this.active) || (this.phase === 'result' && !slab.found) || slab.found;
         if (outline) {
@@ -439,9 +548,11 @@
             c.shadowColor = '#7cf2a7';
             c.shadowBlur = 12;
           } else if (this.phase === 'result') {
+            const pulse = 0.5 + 0.5 * Math.sin(now / 160);
             c.strokeStyle = '#ff6b6b';
             c.shadowColor = '#ff6b6b';
-            c.shadowBlur = 14;
+            c.shadowBlur = 8 + 16 * pulse;
+            c.lineWidth = 2 + 2 * pulse;
           } else {
             c.strokeStyle = 'rgba(255,255,255,.85)';
             c.setLineDash([6, 4]);
@@ -676,6 +787,7 @@
         stats: [
           { key: 'time', label: 'time', value: this.settings.hideTime ? L.formatTime(this.settings.hideTime * 1000) : '—' },
           { key: 'camo', label: 'camo', value: '0%' },
+          { key: 'spot', label: 'spot', value: '—' },
         ],
         buttons: [
           ['Hide it!', () => this.finishHiding(), 'primary'],
@@ -695,6 +807,10 @@
         const score = this.slabCamo(this.active);
         this.active.camo = score;
         this.setStat('camo', score + '%');
+        const busy = this.slabBusyness(this.active);
+        this.active.busy = busy;
+        const label = L.spotLabel(busy);
+        this.setStat('spot', label === 'flat' ? 'flat ⚠' : label, label === 'flat');
       }, 120);
     }
 
@@ -710,6 +826,8 @@
       this.tools.hidden = true;
       this.brushPos = null;
       slab.camo = this.slabCamo(slab);
+      slab.busy = this.slabBusyness(slab);
+      slab.flat = slab.busy < L.FLAT_THRESHOLD;
       this.hiderScore = Math.max(...this.slabs.map((s) => s.camo || 0));
       this.phase = 'hidden';
       this.sfx.play('hide');
@@ -726,7 +844,7 @@
       this.showModal({
         opaque: true,
         title: `Pass the device to hider ${next}`,
-        body: `<p>Hider ${next - 1} is hidden with a camouflage of <b>${this.active.camo}%</b>.</p><p>Hider ${next}: you will see the earlier slabs on the page. Paint your own and hide it somewhere else.</p>`,
+        body: `<p>Hider ${next - 1} is hidden with a camouflage of <b>${this.active.camo}%</b>.${this.active.flat ? ' ⚠️ It sits on a flat area, so the seeker will get a free hint for it.' : ''}</p><p>Hider ${next}: you will see the earlier slabs on the page. Paint your own and hide it somewhere else.</p>`,
         buttons: [[`I am hider ${next} - go!`, () => this.hiderBrief(next), 'primary']],
       });
     }
@@ -741,7 +859,7 @@
       this.showModal({
         opaque: true,
         title: 'Pass the device to the seeker',
-        body: `${camoLine}<p>Seeker: you have <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || 'unlimited'}</b> guesses to click on ${many ? `all <b>${this.slabs.length}</b> hidden slabs` : 'the hidden slab'}. Hints cost 10 seconds.</p>`,
+        body: `${camoLine}${this.slabs.some((s) => s.flat) ? '<p>⚠️ A slab is hiding on a flat area of the page, so the seeker starts with a free hint circle for it.</p>' : ''}<p>Seeker: you have <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || 'unlimited'}</b> guesses to click on ${many ? `all <b>${this.slabs.length}</b> hidden slabs` : 'the hidden slab'}. Hints cost 10 seconds.</p>`,
         buttons: [['I am the seeker - go!', () => this.startSeek(), 'primary']],
       });
     }
@@ -772,18 +890,28 @@
         ],
       });
       this.startTimer(this.settings.seekTime, () => this.endSeek(false));
+      const flat = this.slabs.find((s) => !s.found && s.flat);
+      if (flat) {
+        this.placeHint(flat);
+        this.showToast('Free hint: a slab is hiding on a flat part of the page', 2600);
+      }
       this.render();
+    }
+
+    placeHint(target) {
+      const r = Math.max(90, Math.min(this.vw, this.vh) * 0.18);
+      const a = Math.random() * Math.PI * 2, d = Math.random() * r * 0.45;
+      this.hintCircle = { x: target.x + target.w / 2 + Math.cos(a) * d, y: target.y + target.h / 2 + Math.sin(a) * d, r };
     }
 
     useHint() {
       if (this.phase !== 'seek') return;
-      const target = this.slabs.find((s) => !s.found);
+      const unfound = this.slabs.filter((s) => !s.found);
+      const target = unfound.find((s) => !s.flat) || unfound[0];
       if (!target) return;
       this.hintsUsed++;
       this.adjustTimer(-10000);
-      const r = Math.max(90, Math.min(this.vw, this.vh) * 0.18);
-      const a = Math.random() * Math.PI * 2, d = Math.random() * r * 0.45;
-      this.hintCircle = { x: target.x + target.w / 2 + Math.cos(a) * d, y: target.y + target.h / 2 + Math.sin(a) * d, r };
+      this.placeHint(target);
       this.showToast('Somewhere in the circle…');
       this.render();
     }
@@ -794,6 +922,7 @@
         hit.found = true;
         hit.foundAt = performance.now() - this.seekStart;
         this.sfx.play('hit');
+        this.revealSlab(hit);
         this.markers.push({ x: px, y: py, kind: 'hit' });
         const remaining = this.slabs.filter((s) => !s.found).length;
         if (this.statEls.found) this.setStat('found', `${this.slabs.length - remaining}/${this.slabs.length}`);
@@ -822,6 +951,7 @@
       this.hintCircle = null;
       this.board.className = 'board';
       this.render();
+      this.startFx();
       const elapsed = performance.now() - this.seekStart;
       const score = won ? L.seekScore(msLeft, this.settings.seekTime * 1000, this.guessesUsed + 1, this.settings.guesses, this.hintsUsed) : 0;
       const foundCount = this.slabs.filter((s) => s.found).length;
@@ -867,7 +997,7 @@
         seekTime: this.settings.seekTime,
         guesses: this.settings.guesses,
         camo: this.hiderScore,
-        slabs: [{ x: slab.x, y: slab.y, w: slab.w, h: slab.h, shape: slab.shape, img: slab.canvas.toDataURL('image/png') }],
+        slabs: [{ x: slab.x, y: slab.y, w: slab.w, h: slab.h, shape: slab.shape, camo: slab.camo, img: slab.canvas.toDataURL('image/png') }],
       };
       const code = L.encodeShareCode(level);
       safeSend({ type: 'HSP_RECORD_STATS', stats: { camo: this.hiderScore } });
@@ -927,23 +1057,26 @@
       for (const s of level.slabs) {
         const p = L.rescalePlacement(s, level.vw || this.vw, level.vh || this.vh, this.vw, this.vh);
         const slab = this.makeSlab(p.x, p.y, p.w, p.h, L.SHAPES.includes(s.shape) ? s.shape : 'rect');
-        await new Promise((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => {
-            const c = slab.ctx;
-            c.setTransform(1, 0, 0, 1, 0, 0);
-            c.clearRect(0, 0, slab.canvas.width, slab.canvas.height);
-            c.save();
-            c.setTransform(this.S, 0, 0, this.S, 0, 0);
-            c.clip(slab.path);
-            c.drawImage(img, 0, 0, slab.w, slab.h);
-            c.restore();
-            resolve();
-          };
-          img.onerror = () => reject(new Error('Slab image could not be decoded'));
-          img.src = s.img;
-        });
+        let img;
+        try {
+          img = await this.decodeImage(s.img);
+        } catch {
+          throw new Error('Slab image could not be decoded');
+        }
+        const c = slab.ctx;
+        c.setTransform(1, 0, 0, 1, 0, 0);
+        c.clearRect(0, 0, slab.canvas.width, slab.canvas.height);
+        c.save();
+        c.setTransform(this.S, 0, 0, this.S, 0, 0);
+        c.clip(slab.path);
+        c.drawImage(img, 0, 0, slab.w, slab.h);
+        c.restore();
+        if (img.close) img.close();
         this.moveSlab(slab, p.x, p.y);
+        slab.hider = 1;
+        slab.camo = s.camo != null ? s.camo : level.camo;
+        slab.busy = this.slabBusyness(slab);
+        slab.flat = slab.busy < L.FLAT_THRESHOLD;
         slabs.push(slab);
       }
       this.slabs = slabs;
@@ -991,8 +1124,11 @@
     startSolo(count, time, diff) {
       this.hideModal();
       const rnd = L.mulberry32((Date.now() ^ (this.round * 7919)) >>> 0);
-      const plan = L.planPlacements(count, this.vw, this.vh, { random: rnd, scale: diff.slabScale, topMargin: HUD_H + 6 });
-      this.slabs = plan.map((p) => this.generateChameleon(p, diff, rnd));
+      // Steer chameleons onto thumbnails, images and text rather than the empty
+      // margins that dominate flat sites like Wikipedia or Reddit.
+      const rate = (c) => this.regionBusyness(c.x, c.y, c.w, c.h);
+      const plan = L.planPlacements(count, this.vw, this.vh, { random: rnd, scale: diff.slabScale, topMargin: HUD_H + 6, rate });
+      this.slabs = plan.map((p) => { const slab = this.generateChameleon(p, diff, rnd); slab.busy = p.busy; return slab; });
       this.markers = [];
       this.hintCircle = null;
       this.phase = 'seek';
@@ -1065,6 +1201,7 @@
       const hit = this.slabs.find((s) => !s.found && this.hitSlab(s, px, py));
       if (hit) {
         hit.found = true;
+        this.revealSlab(hit);
         const bonus = 100 + Math.round(this.timeLeft() / 1000) * 3;
         this.roundScore += bonus;
         this.soloScore += bonus;
@@ -1093,6 +1230,7 @@
       this.phase = 'result';
       this.board.className = 'board';
       this.render();
+      this.startFx();
       const found = this.slabs.filter((s) => s.found).length;
       const elapsed = ((performance.now() - this.seekStart) / 1000).toFixed(1);
       let bonus = 0;
@@ -1198,7 +1336,12 @@
         s.style.background = c;
         this.swatchRow.append(s);
       }
-      if (!this.recent.length) this.swatchRow.append(el('span', { style: 'font-size:10px;color:#666', text: 'use eyedropper' }));
+      if (!this.recent.length) {
+        const hint = el('span', { text: 'use eyedropper' });
+        hint.style.fontSize = '10px';
+        hint.style.color = '#666';
+        this.swatchRow.append(hint);
+      }
     }
 
     updateInk() {
@@ -1233,7 +1376,10 @@
 
     pickColorAt(px, py) {
       const S = this.S;
-      const d = this.ctx.getImageData(Math.round(px * S), Math.round(py * S), 1, 1).data;
+      const over = [...this.slabs].reverse().find((s) => this.hitSlab(s, px, py));
+      const d = over
+        ? over.ctx.getImageData(Math.round((px - over.x) * S), Math.round((py - over.y) * S), 1, 1).data
+        : this.bgCtx.getImageData(Math.round(px * S), Math.round(py * S), 1, 1).data;
       this.setColor(L.rgbToHex(d[0], d[1], d[2]), true);
       this.sfx.play('pick');
       this.showToast(`Picked ${this.color}`, 700);
@@ -1370,6 +1516,8 @@
       window.removeEventListener('keydown', this.onKey, true);
       window.removeEventListener('resize', this.onResize);
       clearTimeout(this.resizeT);
+      if (this.fxRaf) cancelAnimationFrame(this.fxRaf);
+      this.fxRaf = 0;
       this.host.remove();
       if (current === this) current = null;
     }

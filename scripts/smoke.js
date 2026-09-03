@@ -28,8 +28,32 @@ p{padding:0 40px;font-size:18px;line-height:1.6;color:#333}
 <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas.</p>
 <p>Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p></body></html>`;
 
+// A Wikipedia-like page served with a strict CSP: no inline styles, no data: or
+// blob: images, no scripts. The extension must still render and play on it.
+const STRICT_CSP = "default-src 'none'; style-src 'self'; img-src 'self'; script-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'";
+const STRICT_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Slab (geology) - Encyclopedia</title><link rel="stylesheet" href="/strict.css"></head>
+<body><div class="side"><ul><li>Main page</li><li>Contents</li><li>Current events</li><li>Random article</li><li>About</li></ul></div>
+<div class="main"><h1>Slab (geology)</h1><p class="sub">From the free encyclopedia</p>
+<div class="infobox"><img src="/photo.svg" width="220" height="150" alt=""><div class="cap">A slab of layered sandstone</div><table><tr><th>Type</th><td>Sedimentary</td></tr><tr><th>Colour</th><td>Grey</td></tr></table></div>
+<p>A <b>slab</b> is a flat, broad, relatively thin piece of stone, concrete or other material. Slabs are used in paving, construction and, in some parts of the internet, for hiding in plain sight. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+<h2>Formation</h2><p>Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.</p>
+<p>Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium.</p>
+<h2>See also</h2><ul><li>Camouflage</li><li>Hide-and-seek</li><li>Chameleon</li></ul></div></body></html>`;
+const STRICT_CSS = `body{margin:0;font-family:sans-serif;color:#202122;background:#fff;display:flex}.side{width:180px;background:#f8f9fa;border-right:1px solid #a2a9b1;padding:20px;font-size:13px;min-height:100vh}.side ul{list-style:none;padding:0;margin:0}.side li{padding:4px 0;color:#0645ad}.main{flex:1;padding:16px 40px;max-width:900px}h1{font-family:serif;font-weight:normal;border-bottom:1px solid #a2a9b1;font-size:28px;margin:0}.sub{color:#54595d;font-size:12px}.infobox{float:right;border:1px solid #a2a9b1;background:#f8f9fa;padding:6px;margin:0 0 12px 16px;width:236px;font-size:12px}.cap{padding:4px 2px}table{width:100%}th{text-align:left;padding:2px 4px}p{line-height:1.6;font-size:14px}h2{font-family:serif;font-weight:normal;border-bottom:1px solid #a2a9b1;font-size:22px}`;
+const PHOTO = `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="150"><rect width="220" height="150" fill="#c9b79c"/><rect y="40" width="220" height="18" fill="#a8927a"/><rect y="90" width="220" height="12" fill="#8c7760"/><circle cx="60" cy="120" r="14" fill="#6d5c48"/><circle cx="170" cy="30" r="10" fill="#e3d6c1"/></svg>`;
+
 async function main() {
-  const server = http.createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end(PAGE); });
+  const server = http.createServer((req, res) => {
+    if (req.url.startsWith('/strict.css')) { res.setHeader('content-type', 'text/css'); return res.end(STRICT_CSS); }
+    if (req.url.startsWith('/photo.svg')) { res.setHeader('content-type', 'image/svg+xml'); return res.end(PHOTO); }
+    if (req.url.startsWith('/strict')) {
+      res.setHeader('content-type', 'text/html');
+      res.setHeader('content-security-policy', STRICT_CSP);
+      return res.end(STRICT_PAGE);
+    }
+    res.setHeader('content-type', 'text/html');
+    res.end(PAGE);
+  });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}/arena`;
 
@@ -117,12 +141,17 @@ async function main() {
   await step('solo: generates slabs, misses cost time, finding all wins the round', async () => {
     await start('solo', { difficulty: 'easy', seekTime: 45, guesses: 3, hideTime: 0 });
     assert.equal(await g(() => window.__HSP__.game.S), 2, 'device scale factor picked up');
+    const hardening = await g(() => { const h = document.querySelector('#hsp-host'); return { sheets: h.shadowRoot.adoptedStyleSheets.length, styleEls: h.shadowRoot.querySelectorAll('style').length, popover: h.matches(':popover-open') }; });
+    assert.deepEqual(hardening, { sheets: 1, styleEls: 0, popover: true }, 'constructed stylesheet + top-layer popover');
     const text = await sh().locator('.modal').textContent();
     assert.match(text, /Round 1/);
     await clickBtn('Start round');
     const slabs = await g(() => window.__HSP__.game.slabs.map((s) => ({ x: s.x, y: s.y, w: s.w, h: s.h, shape: s.shape })));
     assert.equal(slabs.length, 3);
     for (const s of slabs) assert.ok(s.y >= 60 && s.x >= 0 && s.x + s.w <= 1280 && s.y + s.h <= 800);
+    const busy = await g(() => window.__HSP__.game.slabs.map((s) => s.busy));
+    const thr = await g(() => window.HSP.FLAT_THRESHOLD);
+    for (const b of busy) assert.ok(b >= thr, `chameleon placed on a busy spot (${b.toFixed(3)})`);
     await shot('solo-hidden.png');
     const timeBefore = await g(() => window.__HSP__.game.timeLeft());
     // Miss on the HUD (ignored) and on an empty spot (penalised).
@@ -207,6 +236,8 @@ async function main() {
     assert.match(await sh().locator('.modal').textContent(), /Pass the device/);
     await clickBtn('I am the seeker');
     await page.waitForFunction(() => window.__HSP__.game.phase === 'seek');
+    assert.equal(await g(() => window.__HSP__.game.slabs[0].flat), false, 'stripes are a busy spot');
+    assert.equal(await g(() => window.__HSP__.game.hintCircle), null, 'no free hint on a busy spot');
     await shot('hotseat-seek.png');
     await page.mouse.click(100, 700); // miss
     assert.equal(await g(() => window.__HSP__.game.guessesUsed), 1);
@@ -258,11 +289,25 @@ async function main() {
     await shot('hotseat-two-hiders.png');
   });
 
-  await step('hotseat: running out of guesses ends the round with the slab revealed', async () => {
+  await step('hotseat: hiding on a flat area gives the seeker a free hint; out of guesses reveals the slab', async () => {
     await start('hotseat', { difficulty: 'normal', seekTime: 45, guesses: 1, hideTime: 0 });
     await clickBtn('Start painting');
+    const s0 = await g(() => { const s = window.__HSP__.game.active; return { x: s.x, y: s.y, w: s.w, h: s.h }; });
+    await page.keyboard.down('Shift');
+    await page.mouse.move(s0.x + s0.w / 2, s0.y + s0.h / 2); await page.mouse.down(); await page.mouse.move(640, 745, { steps: 8 }); await page.mouse.up();
+    await page.keyboard.up('Shift');
+    await page.waitForTimeout(250);
+    assert.equal(await sh().locator('.stat b').nth(2).textContent(), 'flat ⚠', 'HUD warns about the flat spot');
     await clickBtn('Hide it!');
+    await page.waitForFunction(() => window.__HSP__.game.phase === 'handoff');
+    assert.equal(await g(() => window.__HSP__.game.slabs[0].flat), true);
+    assert.match(await sh().locator('.modal').textContent(), /flat area/);
     await clickBtn('I am the seeker');
+    await page.waitForFunction(() => window.__HSP__.game.phase === 'seek');
+    const hint = await g(() => window.__HSP__.game.hintCircle);
+    const sl = await g(() => { const s = window.__HSP__.game.slabs[0]; return { cx: s.x + s.w / 2, cy: s.y + s.h / 2 }; });
+    assert.ok(hint && Math.hypot(hint.x - sl.cx, hint.y - sl.cy) < hint.r, 'free hint circle covers the flat slab');
+    await shot('flat-hint.png');
     await page.mouse.click(30, 780);
     await page.waitForFunction(() => window.__HSP__.game.phase === 'result');
     assert.match(await sh().locator('.modal').textContent(), /Not found/);
@@ -302,6 +347,63 @@ async function main() {
     await page.mouse.click(s.x + s.w / 2, s.y + s.h / 2);
     await page.waitForFunction(() => window.__HSP__.game.phase === 'result');
     assert.match(await sh().locator('.modal').textContent(), /Found!/);
+  });
+
+  await step('strict-CSP flat page: overlay renders, chameleons avoid empty margins, painting works', async () => {
+    const strict = await context.newPage();
+    const cspViolations = [];
+    strict.on('console', (m) => { if (/Content Security Policy/i.test(m.text())) cspViolations.push(m.text()); });
+    await strict.goto(url.replace('/arena', '/strict'));
+    // Sanity: the CSP really is enforced on this page.
+    await strict.evaluate(() => { const st = document.createElement('style'); st.textContent = 'body{outline:1px solid red}'; document.head.append(st); });
+    await strict.waitForTimeout(100);
+    assert.ok(cspViolations.length > 0, 'the test page enforces its CSP');
+    cspViolations.length = 0;
+    await strict.exposeFunction('__pwCapture', async () => 'data:image/png;base64,' + (await strict.screenshot({ type: 'png' })).toString('base64'));
+    await strict.evaluate(() => {
+      window.chrome = window.chrome || {};
+      window.chrome.runtime = {
+        onMessage: { addListener(fn) { window.__hspListener = fn; } },
+        sendMessage: (m) => (m && m.type === 'HSP_CAPTURE') ? window.__pwCapture().then((screenshot) => ({ ok: true, screenshot })) : Promise.resolve({ ok: true }),
+      };
+    });
+    // <script> tags are blocked by script-src 'none'; content scripts are not, so mimic them with evaluate().
+    await strict.evaluate(fs.readFileSync(path.join(ROOT, 'content/lib.js'), 'utf8'));
+    await strict.evaluate(fs.readFileSync(path.join(ROOT, 'content/game.js'), 'utf8'));
+    const screenshot = 'data:image/png;base64,' + (await strict.screenshot({ type: 'png' })).toString('base64');
+    await strict.evaluate(({ screenshot }) => window.__hspListener({ type: 'HSP_START', mode: 'solo', settings: { difficulty: 'normal', sound: false }, screenshot }, {}, () => {}), { screenshot });
+    await strict.waitForFunction(() => window.__HSP__.game && window.__HSP__.game.ctx && !window.__HSP__.game.modalWrap.hidden);
+    const shost = strict.locator('#hsp-host');
+    const hudBox = await shost.locator('.hud').boundingBox();
+    assert.ok(hudBox && hudBox.height > 40 && hudBox.width > 1000, 'HUD is styled despite style-src CSP');
+    await shost.locator('button', { hasText: 'Start round' }).click();
+    const slabs = await strict.evaluate(() => window.__HSP__.game.slabs.map((s) => ({ x: s.x, y: s.y, w: s.w, h: s.h, busy: s.busy })));
+    assert.equal(slabs.length, 3);
+    const thr = await strict.evaluate(() => window.HSP.FLAT_THRESHOLD);
+    for (const s of slabs) assert.ok(s.busy >= thr, `slab avoided the empty margins (busy ${s.busy.toFixed(3)} at ${s.x},${s.y})`);
+    await strict.screenshot({ path: path.join(OUT, 'strict-wiki-solo.png') });
+    for (const s of slabs) await strict.mouse.click(s.x + s.w / 2, s.y + s.h / 2);
+    await strict.waitForFunction(() => window.__HSP__.game.phase === 'result');
+    // Recapture path (blob decode) and a paint round on the same strict page.
+    await shost.locator('button', { hasText: 'Next round, new snapshot' }).click();
+    await strict.waitForFunction(() => window.__HSP__.game.phase === 'brief' && window.__HSP__.game.round === 2);
+    await strict.evaluate(() => window.__hspListener({ type: 'HSP_HIDE' }, {}, () => {}));
+    const shot2 = 'data:image/png;base64,' + (await strict.screenshot({ type: 'png' })).toString('base64');
+    await strict.evaluate(({ screenshot }) => window.__hspListener({ type: 'HSP_START', mode: 'hotseat', settings: { seekTime: 30, guesses: 3, hideTime: 0, sound: false }, screenshot }, {}, () => {}), { screenshot: shot2 });
+    await strict.waitForFunction(() => window.__HSP__.game && window.__HSP__.game.ctx && !window.__HSP__.game.modalWrap.hidden);
+    await shost.locator('button', { hasText: 'Start painting' }).click();
+    await strict.keyboard.press('e');
+    await strict.mouse.click(90, 400); // sidebar background #f8f9fa
+    assert.equal(await strict.evaluate(() => window.__HSP__.game.color), '#f8f9fa');
+    await strict.keyboard.press('f');
+    const a = await strict.evaluate(() => { const s = window.__HSP__.game.active; return { x: s.x, y: s.y, w: s.w, h: s.h }; });
+    await strict.mouse.click(a.x + a.w / 2, a.y + a.h / 2);
+    await strict.waitForTimeout(250);
+    const swatch = await shost.locator('.swatch').first().evaluate((e) => getComputedStyle(e).backgroundColor);
+    assert.equal(swatch, 'rgb(248, 249, 250)', 'swatch colour set via CSSOM survives CSP');
+    assert.deepEqual(cspViolations, [], 'the game triggered no CSP violations');
+    await strict.screenshot({ path: path.join(OUT, 'strict-wiki-paint.png') });
+    await strict.close();
   });
 
   await step('escape asks before quitting; leaving removes the overlay', async () => {

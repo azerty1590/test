@@ -111,3 +111,32 @@ test('formatTime and temperatureHint', () => {
   assert.match(L.temperatureHint(100, 500), /Warmer/);
   assert.match(L.temperatureHint(500, null), /Cold/);
 });
+
+test('busyness is 0 on flat colour and high on noisy or text-like regions', () => {
+  const w = 40, h = 40;
+  const flat = new Uint8ClampedArray(w * h * 4).fill(255);
+  assert.equal(L.busyness(flat, w, h, 1), 0);
+  const noisy = new Uint8ClampedArray(w * h * 4);
+  const rnd = L.mulberry32(3);
+  for (let i = 0; i < noisy.length; i += 4) { const v = rnd() < 0.5 ? 0 : 255; noisy[i] = noisy[i + 1] = noisy[i + 2] = v; noisy[i + 3] = 255; }
+  assert.ok(L.busyness(noisy, w, h, 1) > 0.8);
+  const soft = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = (y * w + x) * 4; const v = 200 + x / 8; soft[i] = soft[i + 1] = soft[i + 2] = v; soft[i + 3] = 255; }
+  assert.ok(L.busyness(soft, w, h, 1) < L.FLAT_THRESHOLD, 'a gentle gradient still counts as flat');
+  assert.equal(L.spotLabel(0.01), 'flat');
+  assert.equal(L.spotLabel(0.2), 'ok');
+  assert.equal(L.spotLabel(0.7), 'busy');
+});
+
+test('planPlacements prefers busy spots when a rate function is given', () => {
+  const vw = 1200, vh = 800;
+  const rate = (c) => (c.x + c.w / 2 < vw / 2 ? 0.9 : 0);
+  const plan = L.planPlacements(6, vw, vh, { random: L.mulberry32(11), rate });
+  assert.equal(plan.length, 6);
+  for (const p of plan) {
+    assert.ok(p.x + p.w / 2 < vw / 2, `slab at ${p.x} should be on the busy left half`);
+    assert.equal(p.busy, 0.9);
+  }
+  const allFlat = L.planPlacements(3, vw, vh, { random: L.mulberry32(5), rate: () => 0 });
+  assert.equal(allFlat.length, 3, 'flat pages still get placements');
+});
