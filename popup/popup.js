@@ -40,6 +40,10 @@ async function loadPage() {
       btn.disabled = true;
       return;
     }
+    const linkCode = window.HSP && window.HSP.parseShareLink(url);
+    const linkBtn = $('#seekLink');
+    linkBtn.hidden = !linkCode;
+    if (linkCode) linkBtn.dataset.code = linkCode;
     const res = await chrome.runtime.sendMessage({ type: 'HSP_GET_PAGE', url });
     const n = res && res.ok ? res.page.slabs.length : 0;
     countEl.textContent = String(n);
@@ -101,6 +105,7 @@ for (const btn of buttons) {
     buttons.forEach((b) => (b.disabled = true));
     showStatus('Taking a snapshot of the page…', true);
     const payload = { mode, settings: readSettings() };
+    if (btn.dataset.code) payload.code = btn.dataset.code;
     try {
       const res = await chrome.runtime.sendMessage({ type: 'HSP_LAUNCH', payload });
       if (!res || !res.ok) throw new Error(res ? res.error : 'No response');

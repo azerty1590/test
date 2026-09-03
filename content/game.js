@@ -14,12 +14,28 @@
     :host { all: initial; }
     *, *::before, *::after { box-sizing: border-box; }
     .root {
-      position: fixed; inset: 0; z-index: ${ZMAX};
+      position: fixed; inset: 0; z-index: ${ZMAX}; background: #0e0f16;
       font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       color: #f1f2f8; user-select: none; -webkit-user-select: none;
       overscroll-behavior: contain; touch-action: none;
     }
-    .board { position: absolute; left: 0; top: 0; display: block; cursor: crosshair; touch-action: none; }
+    .board { position: absolute; left: 0; top: 0; display: block; cursor: crosshair; touch-action: none; transform-origin: 50% 50%; }
+    .board.tilting { cursor: wait; }
+    .colorbtn { width: 40px; height: 28px; border-radius: 7px; border: 2px solid rgba(255,255,255,.35); cursor: pointer; padding: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,.4); }
+    .colorbtn.open { border-color: #7cf2a7; }
+    .palette {
+      position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); width: 236px;
+      background: rgba(14,15,22,.97); border: 1px solid rgba(255,255,255,.12); border-radius: 14px; padding: 12px;
+      box-shadow: 0 16px 40px rgba(0,0,0,.5); display: flex; flex-direction: column; gap: 8px; text-transform: none; letter-spacing: 0;
+    }
+    .tools.top .palette { bottom: auto; top: calc(100% + 8px); }
+    .palette .prow { display: flex; align-items: center; gap: 6px; }
+    .palette .ptitle { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #9a9fb8; }
+    .palette input.hex { width: 84px; font: 12px ui-monospace, Menlo, Consolas, monospace; background: #0e0f16; color: #f1f2f8; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: 4px 6px; }
+    .palette canvas { display: block; border-radius: 6px; cursor: crosshair; touch-action: none; width: 212px; }
+    .palette .swatches { flex-wrap: wrap; }
+    .palette .swatch { width: 22px; height: 22px; }
+    .palette .close { margin-left: auto; }
     .board.move { cursor: grab; }
     .board.moving { cursor: grabbing; }
     .board.picker { cursor: copy; }
@@ -216,6 +232,7 @@
           pick: [[900, 0, 0.04]],
           hide: [[440, 0, 0.08], [554, 0.08, 0.16]],
           shake: [[70, 0, 0.5], [55, 0.1, 0.5]],
+          tilt: [[520, 0, 0.12], [392, 0.6, 0.12], [520, 1.3, 0.12]],
         }[kind] || [];
         for (const [f, t, d] of notes) {
           const o = c.createOscillator();
@@ -258,6 +275,12 @@
       // Identity of the page for share codes and the hider registry (a host
       // page can pass its own, e.g. the web demo's synthetic scene URLs).
       this.pageUrl = opts.pageUrl || location.href;
+      this.linkBase = opts.linkBase || this.pageUrl;
+      this.levelExtra = opts.levelExtra || null;
+      this.startCode = typeof opts.code === 'string' ? opts.code : null;
+      this.tiltStart = 0;
+      this.tiltUntil = 0;
+      this.tiltAngles = null;
       this.settings.hiders = L.clamp(Number(this.settings.hiders) || 1, 1, 3);
       this.sfx = new Sfx(this.settings.sound !== false);
       this.vw = window.innerWidth;
@@ -268,6 +291,7 @@
       this.phase = 'loading';
       this.tool = 'brush';
       this.color = '#ff8bd1';
+      this.hsl = L.rgbToHsl(...L.hexToRgb(this.color));
       this.brushSize = 14;
       this.opacity = 1;
       this.recent = [];
@@ -561,7 +585,8 @@
     // result pulse, or hidden slabs idling in 3D).
     needsAnimation() {
       if (this.fx.length || this.phase === 'result') return true;
-      if (this.phase === 'seek' && (this.wobbleAmp > 0 || this.lens || performance.now() < this.shakeUntil) && this.slabs.some((s) => !s.found)) return true;
+      if (this.phase === 'seek' && (this.wobbleAmp > 0 || this.lens || performance.now() < this.shakeUntil || performance.now() < this.tiltUntil) && this.slabs.some((s) => !s.found)) return true;
+      if (performance.now() < this.tiltUntil) return true;
       if (this.phase === 'paint' && this.previewWobble && this.active) return true;
       return false;
     }
@@ -588,6 +613,14 @@
           const look = (this.wobbleAmp * 0.6 * Math.PI) / 180;
           p.ry += this.look.dx * look;
           p.rx += this.look.dy * look;
+        }
+        // While the page is tilted in 3D, a slab's depth lifts it off the page:
+        // it drifts against the pixels it copied and casts a shadow.
+        if (this.tiltAngles) {
+          const e = slab.depth * 1.6;
+          p.ox += e * Math.sin(this.tiltAngles.ry);
+          p.oy -= e * Math.sin(this.tiltAngles.rx);
+          p.lift = Math.max(p.lift, 0.02);
         }
       } else if (amp > 0) {
         // Paint-phase preview: a plain sway.
@@ -699,10 +732,28 @@
     }
 
     // ---------- rendering ----------
+    // Perspective sweep of the whole board: ry swings one way then the other,
+    // rx nods once. Guessing is paused while it runs.
+    applyTilt(now) {
+      if (now < this.tiltUntil) {
+        const p = (now - this.tiltStart) / (this.tiltUntil - this.tiltStart);
+        const ry = 28 * Math.sin(2 * Math.PI * p);
+        const rx = 10 * Math.sin(Math.PI * p);
+        this.tiltAngles = { ry: (ry * Math.PI) / 180, rx: (rx * Math.PI) / 180 };
+        this.board.style.transform = `perspective(1400px) rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg)`;
+        this.board.classList.add('tilting');
+      } else if (this.tiltAngles) {
+        this.tiltAngles = null;
+        this.board.style.transform = '';
+        this.board.classList.remove('tilting');
+      }
+    }
+
     render() {
       const c = this.ctx;
       if (!c) return;
       const S = this.S;
+      this.applyTilt(performance.now());
       c.setTransform(S, 0, 0, S, 0, 0);
       c.clearRect(0, 0, this.vw, this.vh);
       c.drawImage(this.bgGpu || this.bg, 0, 0, this.vw, this.vh);
@@ -922,7 +973,7 @@
     begin() {
       switch (this.mode) {
         case 'solo': return this.soloBrief();
-        case 'seek-code': return this.codeEntry();
+        case 'seek-code': return this.codeEntry(this.startCode);
         case 'seek-page': return this.pageSeekEntry();
         case 'hide-share':
         default: return this.hiderBrief();
@@ -1016,6 +1067,7 @@
         this.setStat('camo', score + '%');
         const busy = this.slabBusyness(this.active);
         this.active.busy = busy;
+        this.updatePalette();
         const label = L.spotLabel(busy);
         this.setStat('spot', label === 'flat' ? 'flat ⚠' : label, label === 'flat');
       }, 120);
@@ -1098,6 +1150,7 @@
         ],
         buttons: [
           ['🔍 Lens', (e) => this.toggleLens(e.currentTarget), 'small'],
+          ['🧊 Tilt (−8s)', () => this.tilt(), 'small'],
           ['👋 Shake (−5s)', () => this.shake(), 'small'],
           ['Hint (−10s)', () => this.useHint(), 'small'],
           ['Give up', () => this.endSeek(false), 'danger small'],
@@ -1128,6 +1181,17 @@
     }
 
     // Everything hidden jolts for a moment: a real object cannot help but move.
+    tilt() {
+      if (this.phase !== 'seek' || performance.now() < this.tiltUntil) return;
+      this.adjustTimer(-8000);
+      this.tiltStart = performance.now();
+      this.tiltUntil = this.tiltStart + 2600;
+      this.sfx.play('tilt');
+      this.showToast('Looking at the page in 3D…', 1500);
+      this.startFx();
+      setTimeout(() => this.render(), 2650);
+    }
+
     shake() {
       if (this.phase !== 'seek') return;
       this.shakeUntil = performance.now() + 1500;
@@ -1210,6 +1274,7 @@
       this.lens = null;
       this.lensMode = false;
       this.hold = null;
+      this.tiltUntil = 0;
       this.phase = 'result';
       this.hintCircle = null;
       this.board.className = 'board';
@@ -1270,42 +1335,62 @@
         guesses: this.settings.guesses,
         wobble: this.settings.wobble,
         camo: this.hiderScore,
-        slabs: [{ x: slab.x, y: slab.y, w: slab.w, h: slab.h, shape: slab.shape, camo: slab.camo, persona: slab.persona, img: slab.canvas.toDataURL('image/png') }],
+        slabs: [{ x: slab.x, y: slab.y, w: slab.w, h: slab.h, shape: slab.shape, camo: slab.camo, persona: slab.persona, img: this.slabImage(slab) }],
       };
+      const extra = typeof this.levelExtra === 'function' ? this.levelExtra() : this.levelExtra;
+      if (extra && typeof extra === 'object') Object.assign(level, extra);
       const code = L.encodeShareCode(level);
+      const link = L.makeShareLink(this.linkBase, code);
       safeSend({ type: 'HSP_RECORD_STATS', stats: { camo: this.hiderScore } });
       const kept = el('p', { class: 'muted', text: 'Keeping this slab hidden on this page…' });
       this.storeHides(level).then((count) => {
         kept.textContent = count ? `This slab now waits on this page: ${count} hider${count === 1 ? '' : 's'} here. The toolbar badge shows the count.` : 'Could not keep the slab on this page (storage unavailable).';
       });
+      const linkTa = el('textarea', { class: 'code link', readonly: 'readonly' });
+      linkTa.value = link;
+      linkTa.style.height = '64px';
       const ta = el('textarea', { class: 'code', readonly: 'readonly' });
       ta.value = code;
-      const copy = async () => {
+      ta.style.height = '64px';
+      const copy = async (text, what, area) => {
         try {
-          await navigator.clipboard.writeText(code);
-          this.showToast('Code copied!');
+          await navigator.clipboard.writeText(text);
+          this.showToast(`${what} copied!`);
         } catch {
-          ta.focus(); ta.select();
+          area.focus(); area.select();
           this.showToast('Select the text and copy it manually', 2500);
         }
       };
-      this.setHud({ title: '📤 Hidden', sub: 'share the code' });
+      this.setHud({ title: '📤 Hidden', sub: 'share the link' });
       this.showModal({
         opaque: true,
-        title: 'Slab hidden! Share this code',
+        title: 'Slab hidden! Share the link',
         bodyEl: el('div', {}, [
-          el('p', { html: `Camouflage <b>${this.hiderScore}%</b>, persona <b>${L.PERSONAS[slab.persona].label}</b>. Your friend opens <b>${this.pageHost()}</b> at the same page, picks <i>Seek from Code</i> and pastes this (${Math.round(code.length / 1024)} KB):` }),
+          el('p', { html: `Camouflage <b>${this.hiderScore}%</b>, persona <b>${L.PERSONAS[slab.persona].label}</b>. Send this link (${Math.round(link.length / 1024)} KB). It opens <b>${this.pageHost()}</b> at the same page; the extension spots the hider in the address and offers to seek.` }),
+          linkTa,
+          el('p', { class: 'muted', text: 'No link support where you are pasting? The raw code works in Seek from Code:' }),
           ta,
-          el('p', { class: 'muted', text: 'The code contains only the painted slab and its position, not the page.' }),
+          el('p', { class: 'muted', text: 'Link and code contain only the painted slab and its position, never the page.' }),
           kept,
         ]),
         buttons: [
-          ['Copy code', copy, 'primary'],
+          ['Copy link', () => copy(link, 'Link', linkTa), 'primary'],
+          ['Copy code', () => copy(code, 'Code', ta)],
           ['Seek it myself now', () => this.handoff()],
           ['Quit', () => this.destroy(), 'ghost'],
         ],
       });
-      copy();
+      copy(link, 'Link', linkTa);
+    }
+
+    // Slab pixels as a data URL: WebP where the browser can write it (a
+    // fraction of the PNG size, which keeps share links pasteable), else PNG.
+    slabImage(slab) {
+      try {
+        const webp = slab.canvas.toDataURL('image/webp', 0.95);
+        if (webp.startsWith('data:image/webp')) return webp;
+      } catch { /* fall through */ }
+      return slab.canvas.toDataURL('image/png');
     }
 
     // Registers a level's slabs as hiders on this page (ids derive from the
@@ -1364,24 +1449,35 @@
       });
     }
 
-    codeEntry() {
+    async codeEntry(prefill) {
       this.phase = 'code';
       this.slabs = [];
       this.markers = [];
       this.render();
-      this.setHud({ title: '📥 Seek from code', sub: 'paste a code' });
-      const ta = el('textarea', { class: 'code', placeholder: 'HSP1.…' });
+      this.setHud({ title: '📥 Seek from code', sub: prefill ? 'loading the link' : 'paste a link or code' });
+      const ta = el('textarea', { class: 'code', placeholder: 'Paste a link (…#hsp1=…) or a code (HSP1.…)' });
       const err = el('p', { class: 'muted' });
-      const body = el('div', {}, [el('p', { text: 'Paste the code your friend sent. Open the same page first for the best experience.' }), ta, err]);
+      const body = el('div', {}, [el('p', { text: "Paste the link or code your friend sent. Open the same page first for the best experience." }), ta, err]);
       const start = async () => {
         try {
-          const level = L.decodeShareCode(ta.value);
+          const text = ta.value.trim();
+          const level = L.decodeShareCode(L.parseShareLink(text) || text);
           await this.loadLevel(level);
         } catch (e) {
           err.textContent = e.message;
           err.style.color = '#ff6b6b';
         }
       };
+      if (prefill) {
+        try {
+          const level = L.decodeShareCode(L.parseShareLink(prefill) || prefill);
+          await this.loadLevel(level);
+          return;
+        } catch (e) {
+          err.textContent = `The link could not be loaded: ${e.message}`;
+          err.style.color = '#ff6b6b';
+        }
+      }
       this.showModal({ title: 'Seek from Code', bodyEl: body, buttons: [['Start seeking', start, 'primary'], ['Quit', () => this.destroy(), 'ghost']] });
       setTimeout(() => ta.focus(), 50);
     }
@@ -1490,6 +1586,7 @@
         ],
         buttons: [
           ['🔍 Lens', (e) => this.toggleLens(e.currentTarget), 'small'],
+          ['🧊 Tilt (−8s)', () => this.tilt(), 'small'],
           ['👋 Shake (−5s)', () => this.shake(), 'small'],
           ['Give up', () => this.endSolo(false), 'danger small'],
           ['Quit', () => this.confirmQuit(), 'ghost small'],
@@ -1591,6 +1688,7 @@
       this.lens = null;
       this.lensMode = false;
       this.hold = null;
+      this.tiltUntil = 0;
       this.phase = 'result';
       this.board.className = 'board';
       this.render();
@@ -1633,8 +1731,12 @@
       const stamp = toolBtn('stamp', '🩹', 'Stamp: copies the real pixels behind the slab. Limited ink!', 's');
       this.inkBar = el('i');
       stamp.append(el('div', { class: 'ink' }, [this.inkBar]));
-      const colorInput = el('input', { type: 'color', value: this.color, oninput: (e) => this.setColor(e.target.value, false) });
-      this.colorInput = colorInput;
+      const colorBtn = el('button', { class: 'colorbtn', title: 'Colour picker: colours behind the slab, hue and shade, hex', onclick: () => this.togglePicker() });
+      colorBtn.style.background = this.color;
+      this.colorBtn = colorBtn;
+      this.picker = this.buildPicker();
+      this.picker.hidden = true;
+      t.append(this.picker);
       this.swatchRow = el('div', { class: 'swatches' });
       const sizeIn = el('input', { type: 'range', min: '2', max: '60', value: String(this.brushSize), oninput: (e) => this.setBrush(Number(e.target.value)) });
       this.sizeInput = sizeIn;
@@ -1655,7 +1757,7 @@
         stamp,
         toolBtn('fill', '🪣', 'Fill the whole slab', 'f'),
         el('div', { class: 'sep' }),
-        el('label', { class: 'field' }, [document.createTextNode('colour'), colorInput]),
+        el('div', { class: 'field' }, [document.createTextNode('colour'), colorBtn]),
         el('div', { class: 'field' }, [document.createTextNode('recent'), this.swatchRow]),
         el('label', { class: 'field' }, [document.createTextNode('brush'), sizeIn]),
         el('label', { class: 'field' }, [document.createTextNode('opacity'), opIn]),
@@ -1675,6 +1777,84 @@
       this.setTool(this.tool);
     }
 
+    // ---------- colour picker ----------
+    buildPicker() {
+      const p = el('div', { class: 'palette' });
+      const hex = el('input', { class: 'hex', maxlength: '7', spellcheck: 'false', onchange: (e) => { const v = e.target.value.trim(); if (L.hexToRgb(v)) this.setColor(v.startsWith('#') ? v.toLowerCase() : '#' + v.toLowerCase(), true); else e.target.value = this.color; } });
+      hex.value = this.color;
+      this.hexInput = hex;
+      const head = el('div', { class: 'prow' }, [el('span', { class: 'ptitle', text: 'Colour' }), hex]);
+      if (typeof window.EyeDropper === 'function') {
+        head.append(el('button', { class: 'btn small', text: '🎯 Screen', title: 'Pick any colour on your screen, even outside the page', onclick: async () => {
+          try { const r = await new window.EyeDropper().open(); if (r && r.sRGBHex) this.setColor(r.sRGBHex.toLowerCase(), true); } catch { /* cancelled */ }
+        } }));
+      }
+      head.append(el('button', { class: 'btn small ghost close', text: '✕', onclick: () => this.togglePicker(false) }));
+      this.behindRow = el('div', { class: 'swatches' });
+      const sl = el('canvas', { width: '212', height: '120' });
+      const hue = el('canvas', { width: '212', height: '14' });
+      this.slCanvas = sl;
+      this.hueCanvas = hue;
+      const bind = (canvas, fn) => {
+        const at = (e) => { const r = canvas.getBoundingClientRect(); return { x: L.clamp((e.clientX - r.left) / r.width, 0, 1), y: L.clamp((e.clientY - r.top) / r.height, 0, 1) }; };
+        let down = false;
+        canvas.addEventListener('pointerdown', (e) => { down = true; canvas.setPointerCapture(e.pointerId); fn(at(e)); e.stopPropagation(); });
+        canvas.addEventListener('pointermove', (e) => { if (down) fn(at(e)); });
+        canvas.addEventListener('pointerup', () => { down = false; this.setColor(this.color, true); });
+      };
+      bind(sl, ({ x, y }) => { this.hsl = [this.hsl[0], x, 1 - y]; this.setColor(L.rgbToHex(...L.hslToRgb(this.hsl[0], this.hsl[1], this.hsl[2])), false, true); });
+      bind(hue, ({ x }) => { this.hsl = [x, this.hsl[1], this.hsl[2]]; this.setColor(L.rgbToHex(...L.hslToRgb(this.hsl[0], this.hsl[1], this.hsl[2])), false, true); });
+      p.append(head, el('span', { class: 'ptitle', text: 'Behind the slab' }), this.behindRow, el('span', { class: 'ptitle', text: 'Hue · shade' }), sl, hue);
+      return p;
+    }
+
+    togglePicker(force) {
+      const open = force != null ? force : this.picker.hidden;
+      this.picker.hidden = !open;
+      this.colorBtn.classList.toggle('open', open);
+      if (open) { this.updatePalette(); this.drawPicker(); }
+    }
+
+    drawPicker() {
+      if (!this.slCanvas || this.picker.hidden) return;
+      const [h, s, l] = this.hsl;
+      const c = this.slCanvas.getContext('2d');
+      const W = this.slCanvas.width, H = this.slCanvas.height;
+      // Shade square: x = saturation, y = lightness (top light, bottom dark).
+      for (let y = 0; y < H; y += 2) {
+        const g = c.createLinearGradient(0, 0, W, 0);
+        const li = 1 - y / H;
+        g.addColorStop(0, L.rgbToHex(...L.hslToRgb(h, 0, li)));
+        g.addColorStop(1, L.rgbToHex(...L.hslToRgb(h, 1, li)));
+        c.fillStyle = g;
+        c.fillRect(0, y, W, 2);
+      }
+      c.beginPath(); c.arc(s * W, (1 - l) * H, 6, 0, Math.PI * 2); c.lineWidth = 2; c.strokeStyle = '#fff'; c.stroke(); c.strokeStyle = '#000'; c.lineWidth = 1; c.stroke();
+      const hc = this.hueCanvas.getContext('2d');
+      const hg = hc.createLinearGradient(0, 0, this.hueCanvas.width, 0);
+      for (let i = 0; i <= 6; i++) hg.addColorStop(i / 6, L.rgbToHex(...L.hslToRgb(i / 6, 1, 0.5)));
+      hc.fillStyle = hg; hc.fillRect(0, 0, this.hueCanvas.width, this.hueCanvas.height);
+      hc.fillStyle = '#fff'; hc.fillRect(h * this.hueCanvas.width - 2, 0, 4, this.hueCanvas.height);
+      hc.strokeStyle = '#000'; hc.strokeRect(h * this.hueCanvas.width - 2.5, 0.5, 5, this.hueCanvas.height - 1);
+    }
+
+    // The most common colours of the page under and around the active slab.
+    updatePalette() {
+      if (!this.behindRow || !this.active || this.picker.hidden) return;
+      const S = this.S, s = this.active, pad = 12;
+      const x = Math.max(0, Math.round((s.x - pad) * S)), y = Math.max(0, Math.round((s.y - pad) * S));
+      const w = Math.min(this.bg.width - x, Math.round((s.w + pad * 2) * S)), h = Math.min(this.bg.height - y, Math.round((s.h + pad * 2) * S));
+      if (w <= 0 || h <= 0) return;
+      const data = this.bgCtx.getImageData(x, y, w, h).data;
+      const colours = L.quantizePalette(data, 8, Math.max(1, Math.round((w * h) / 6000)));
+      this.behindRow.replaceChildren();
+      for (const c of colours) {
+        const sw = el('div', { class: 'swatch', title: c, onclick: () => this.setColor(c, true) });
+        sw.style.background = c;
+        this.behindRow.append(sw);
+      }
+    }
+
     setTool(tool) {
       this.tool = tool;
       for (const b of this.tools.querySelectorAll('.tool')) b.classList.toggle('active', b.dataset.tool === tool);
@@ -1688,9 +1868,12 @@
       this.render();
     }
 
-    setColor(hex, remember) {
+    setColor(hex, remember, fromPicker) {
       this.color = hex;
-      if (this.colorInput) this.colorInput.value = hex;
+      if (this.colorBtn) this.colorBtn.style.background = hex;
+      if (this.hexInput) this.hexInput.value = hex;
+      if (!fromPicker) { const rgb = L.hexToRgb(hex); if (rgb) this.hsl = L.rgbToHsl(...rgb); }
+      this.drawPicker();
       if (remember) {
         this.recent = [hex, ...this.recent.filter((c) => c !== hex)].slice(0, 8);
         this.renderSwatches();
@@ -1820,6 +2003,7 @@
       if (e.button === 2) return;
       if (this.phase === 'seek') {
         if (p.y < this.hudH()) return;
+        if (performance.now() < this.tiltUntil) return;
         // Quick tap = guess. Hold still = magnifier lens (released without guessing).
         try { this.board.setPointerCapture(e.pointerId); } catch { /* ignore */ }
         clearTimeout(this.hold && this.hold.timer);

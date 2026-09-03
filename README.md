@@ -8,11 +8,12 @@ Turn **any web page** into a hide-and-seek arena. A hider gets a blank grey slab
 | --- | --- |
 | **Hide & Seek** (hot-seat) | Player 1 paints and hides a slab, hands over the device, player 2 seeks. Roles swap each round. Set **Hiders** to 2 or 3 for party rounds where every hider paints in turn and the seeker must find them all. |
 | **Chameleon Hunt** (solo) | The extension hides several slabs that copy the page almost perfectly. Each has a tiny giveaway: a slightly shifted colour, a nudged pattern and a little eye. Find them all before time runs out. Rounds get bigger. |
-| **Hide & Share** | Paint and hide, then copy a code. A friend opens the same page and pastes it in **Seek from Code**. |
-| **Seek from Code** | Paste a friend's code and hunt. |
+| **Hide & Share** | Paint and hide, then copy a **link** (the page address with the slab in the fragment) or a raw code. A friend who opens the link sees *Someone is hiding in this link* in the popup and the badge turns pink. |
+| **Seek from Code** | Paste a friend's link or code and hunt. |
 
 ## Painting tools
 
+- **Colour picker**: click the colour swatch for a panel with the most common colours found behind the slab, a hue strip and shade square, hex entry, and, in browsers that have it, the screen-wide EyeDropper that can sample anything on your display.
 - **Brush** (`B`), size `[` / `]`, opacity slider
 - **Eyedropper** (`E`): pick any colour from the page. Recently picked colours become swatches.
 - **Stamp** (`S`): copies the real pixels behind the slab. It has a limited ink budget (30 % of the slab), so most of the camouflage still has to be painted by hand.
@@ -30,6 +31,7 @@ Every slab you share and every code you paste stays hidden on that page (locally
 A screen cannot show real volume, so the seeker gets ways to look instead:
 
 - **Lens.** Hold a finger or the mouse still on the page and a magnifier floats above it (never under your hand). Release without guessing. The 🔍 button turns it into a hover lens for the mouse.
+- **Tilt.** Costs 8 seconds and sweeps the whole page in 3D perspective for a moment. Flat pixels stay coherent, but a slab has depth: it lifts off the page, drifts against the pattern it copied and throws a shadow. This is the tool for pixel-perfect hiders.
 - **Look-around.** Moving the mouse, or tilting a phone with a gyroscope, tilts every hidden slab a little the other way, so its edges and shadow drift while the page stays put.
 - **Shake.** Costs 5 seconds and makes everything hidden jolt for a moment.
 - **Haptics.** Hits, misses and the final seconds vibrate on devices that support it.

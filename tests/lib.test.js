@@ -201,3 +201,28 @@ test('personas cycle through poses that never repeat and stay within bounds', ()
   }
   assert.equal(L.poseTransform({ kind: 'shift', dur: 3, dir: [1, 0] }, 1.5, 0, 1, 0).ox, 0, 'still setting disables poses');
 });
+
+test('share links wrap a code in the page fragment and parse back', () => {
+  const level = { v: 1, url: 'https://example.com/p?q=1', vw: 1000, vh: 700, slabs: [{ x: 1, y: 2, w: 30, h: 30, shape: 'rect', img: 'data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==' }] };
+  const code = L.encodeShareCode(level);
+  const link = L.makeShareLink('https://example.com/p?q=1#old', code);
+  assert.ok(link.startsWith('https://example.com/p?q=1#hsp1='));
+  assert.equal(link.includes('HSP1.'), false, 'prefix is not repeated in the link');
+  assert.equal(L.parseShareLink(link), code);
+  assert.equal(L.parseShareLink('https://example.com/#other=1'), null);
+  assert.equal(L.parseShareLink('text with ' + link + ' inside'), code, 'links are found inside text');
+  assert.deepEqual(L.decodeShareCode(L.parseShareLink(link)), level, 'webp slab images are accepted');
+});
+
+test('quantizePalette returns the dominant colours, merged and ordered', () => {
+  const px = [];
+  const put = (rgb, n) => { for (let i = 0; i < n; i++) px.push(rgb[0], rgb[1], rgb[2], 255); };
+  put([250, 250, 250], 500); put([248, 251, 249], 100); put([20, 40, 200], 200); put([200, 30, 30], 50); put([0, 0, 0], 0);
+  px.push(9, 9, 9, 0);
+  const pal = L.quantizePalette(new Uint8ClampedArray(px), 8, 1);
+  assert.equal(pal.length, 3, 'near-white shades merge, transparent pixels are ignored');
+  assert.match(pal[0], /^#f[0-9a-f]f[0-9a-f]f[0-9a-f]$/);
+  assert.equal(pal[1], '#1428c8');
+  assert.equal(pal[2], '#c81e1e');
+  assert.deepEqual(L.quantizePalette(new Uint8ClampedArray(0), 8, 1), []);
+});

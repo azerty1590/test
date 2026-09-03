@@ -306,11 +306,48 @@
       throw new Error('Code is damaged or from an unsupported version');
     }
     for (const s of level.slabs) {
-      if (typeof s.img !== 'string' || !s.img.startsWith('data:image/png;base64,')) {
+      if (typeof s.img !== 'string' || !/^data:image\/(png|webp|jpeg);base64,[A-Za-z0-9+/=]+$/.test(s.img)) {
         throw new Error('Code contains invalid slab data');
       }
     }
     return level;
+  }
+
+  // Share links: the page URL with the code body in the fragment, so a friend
+  // lands on the right page and the extension (or the demo) can offer to seek.
+  const LINK_KEY = 'hsp1';
+
+  function makeShareLink(base, code) {
+    const body = String(code || '').startsWith(CODE_PREFIX) ? code.slice(CODE_PREFIX.length) : String(code || '');
+    return String(base || '').split('#')[0] + '#' + LINK_KEY + '=' + body;
+  }
+
+  function parseShareLink(text) {
+    const m = new RegExp('#' + LINK_KEY + '=([A-Za-z0-9_-]{16,})').exec(String(text || ''));
+    return m ? CODE_PREFIX + m[1] : null;
+  }
+
+  // The most common colours in an RGBA buffer, as hex strings, for a
+  // "colours behind the slab" palette. Near-duplicates are merged.
+  function quantizePalette(data, n, stride) {
+    stride = Math.max(1, stride || 1);
+    const buckets = new Map();
+    for (let i = 0; i < data.length; i += 4 * stride) {
+      if (data[i + 3] < 8) continue;
+      const key = ((data[i] >> 3) << 10) | ((data[i + 1] >> 3) << 5) | (data[i + 2] >> 3);
+      let b = buckets.get(key);
+      if (!b) { b = { r: 0, g: 0, b: 0, n: 0 }; buckets.set(key, b); }
+      b.r += data[i]; b.g += data[i + 1]; b.b += data[i + 2]; b.n++;
+    }
+    const sorted = [...buckets.values()].sort((a, b) => b.n - a.n);
+    const out = [];
+    for (const b of sorted) {
+      const rgb = [b.r / b.n, b.g / b.n, b.b / b.n];
+      if (out.some((o) => colorDistance(o, rgb) < 28)) continue;
+      out.push(rgb);
+      if (out.length >= (n || 8)) break;
+    }
+    return out.map((c) => rgbToHex(c[0], c[1], c[2]));
   }
 
   // Map a slab saved on one viewport onto another viewport size.
@@ -386,6 +423,9 @@
     planPlacements,
     encodeShareCode,
     decodeShareCode,
+    makeShareLink,
+    parseShareLink,
+    quantizePalette,
     rescalePlacement,
     seekScore,
     pageKey,

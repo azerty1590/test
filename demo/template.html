@@ -386,14 +386,41 @@
   document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) $('#drop').classList.remove('on'); });
   document.addEventListener('drop', (e) => { e.preventDefault(); $('#drop').classList.remove('on'); useImage(e.dataTransfer.files[0]); });
 
-  function start(mode) {
+  function selectScene(name) {
+    current = name;
+    for (const x of $('#scenes').children) x.classList.toggle('on', x.dataset.scene === name);
+    $('#shotRow').hidden = name !== 'shot';
+  }
+
+  function start(mode, code) {
     const listener = window.__demo.listener();
     if (!listener) { showStatus('The game script did not load.'); return; }
     if (current === 'shot' && !userImage) { showStatus('Pick a screenshot first, or choose one of the fake pages.'); return; }
     showStatus('');
     launcher.hidden = true; restore.hidden = true;
     const screenshot = window.__demo.snapshot(false);
-    listener({ type: 'HSP_START', mode, settings: readSettings(), screenshot, pageUrl: pageUrl() }, {}, () => {});
+    listener({
+      type: 'HSP_START', mode, settings: readSettings(), screenshot, pageUrl: pageUrl(), code,
+      // Share links point back at this demo and remember which fake page (and seed) the slab was painted on.
+      linkBase: location.href.split('#')[0],
+      levelExtra: () => ({ scene: { name: current, seed } }),
+    }, {}, () => {});
+  }
+
+  // Opened through a share link: rebuild the same fake page and seek right away.
+  function openLink() {
+    const code = window.HSP.parseShareLink(location.href);
+    if (!code) return false;
+    try {
+      const level = window.HSP.decodeShareCode(code);
+      if (level.scene && level.scene.name && level.scene.name !== 'shot') { seed = Number(level.scene.seed) || seed; selectScene(level.scene.name); drawScene(false); }
+      else if (level.scene && level.scene.name === 'shot') { selectScene('shot'); drawScene(false); showStatus('This slab was hidden on a screenshot. Load the same screenshot, then paste the link into Seek from Code.'); return false; }
+      start('seek-code', code);
+      return true;
+    } catch (e) {
+      showStatus(`The link could not be opened: ${e.message}`);
+      return false;
+    }
   }
   document.querySelectorAll('.mode').forEach((b) => b.addEventListener('click', () => start(b.dataset.mode)));
   $('#collapse').addEventListener('click', () => { launcher.hidden = true; restore.hidden = false; });
@@ -407,5 +434,7 @@
   loadSettings();
   drawScene(false);
   refreshCounts();
+  openLink();
+  window.addEventListener('hashchange', () => { if (!document.getElementById('hsp-host')) openLink(); });
 })();
 </script>

@@ -14,6 +14,11 @@
     </div>
   </header>
 
+  <button class="mode wide link" id="seekLink" hidden data-mode="seek-code">
+    <span class="icon">🔗</span>
+    <span><span class="label">Someone is hiding in this link</span><br><span class="hint">Seek the slab that came with the page address.</span></span>
+  </button>
+
   <section class="page" id="page">
     <div class="count"><b id="pageCount">…</b><span id="pageLabel">looking at this page</span></div>
     <button class="mode wide" data-mode="seek-page" id="seekPage" disabled>
@@ -134,6 +139,7 @@
       <p class="small">Screenshots are taken only when you start a round and never leave your browser. Shortcut: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>.</p>
     </details>
   </footer>
+  <script src="../content/lib.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -120,19 +120,31 @@ async function main() {
       const removed = await removeHides('https://example.com/a?x=1', ['one']);
       await refreshBadge(tab.id, 'https://example.com/a?x=1');
       const badge2 = await chrome.action.getBadgeText({ tabId: tab.id });
+      await refreshBadge(tab.id, 'https://example.com/a?x=1#hsp1=' + 'A'.repeat(40));
+      const badgeLink = await chrome.action.getBadgeText({ tabId: tab.id });
       let bad = null; try { await storeHide({ url: 'https://x', slab: { img: 'javascript:1' } }); } catch (e) { bad = e.message; }
-      return { a: a.count, dup: dup.count, b: b.count, other: other.slabs.length, badge, removed: removed.count, badge2, bad };
+      return { a: a.count, dup: dup.count, b: b.count, other: other.slabs.length, badge, removed: removed.count, badge2, badgeLink, bad };
     });
-    assert.deepEqual(reg, { a: 1, dup: 1, b: 2, other: 0, badge: '2', removed: 1, badge2: '1', bad: 'Bad hide entry' });
+    assert.deepEqual(reg, { a: 1, dup: 1, b: 2, other: 0, badge: '2', removed: 1, badge2: '1', badgeLink: '!', bad: 'Bad hide entry' });
   });
 
   const popup = await context.newPage();
   await step('popup renders modes, settings and stats', async () => {
     await popup.goto(`chrome-extension://${extId}/popup/popup.html`);
-    assert.equal(await popup.locator('.mode').count(), 5);
+    assert.equal(await popup.locator('.mode').count(), 6);
     await popup.waitForFunction(() => document.querySelector('#pageCount').textContent !== '…');
     assert.equal(await popup.locator('#pageCount').textContent(), '–', 'the popup tab itself is not a playable page');
     assert.equal(await popup.locator('#seekPage').isDisabled(), true);
+    assert.equal(await popup.locator('#seekLink').isHidden(), true);
+    // A share link in the active tab's address shows the "someone is hiding in this link" button.
+    const linkShown = await popup.evaluate(async () => {
+      const code = window.HSP.encodeShareCode({ v: 1, url: 'https://example.com/a', vw: 1, vh: 1, slabs: [{ x: 0, y: 0, w: 1, h: 1, shape: 'rect', img: 'data:image/png;base64,iVBORw0KGgo=' }] });
+      chrome.tabs.query = async () => [{ id: 1, url: window.HSP.makeShareLink('https://example.com/a', code) }];
+      await loadPage();
+      const b = document.querySelector('#seekLink');
+      return { hidden: b.hidden, code: b.dataset.code === code };
+    });
+    assert.deepEqual(linkShown, { hidden: false, code: true });
     await popup.waitForFunction(() => document.querySelector('#stRounds').textContent === '1');
     assert.equal(await popup.locator('#stCamo').textContent(), '77%');
     await popup.selectOption('#difficulty', 'hard');
@@ -163,11 +175,11 @@ async function main() {
   await page.addScriptTag({ path: path.join(ROOT, 'content/lib.js') });
   await page.addScriptTag({ path: path.join(ROOT, 'content/game.js') });
 
-  const start = async (mode, settings) => {
+  const start = async (mode, settings, extra) => {
     await page.evaluate(() => window.__hspListener({ type: 'HSP_HIDE' }, {}, () => {}));
     await page.waitForTimeout(100);
     const screenshot = 'data:image/png;base64,' + (await page.screenshot({ type: 'png' })).toString('base64');
-    await page.evaluate(({ mode, settings, screenshot }) => window.__hspListener({ type: 'HSP_START', mode, settings, screenshot }, {}, () => {}), { mode, settings, screenshot });
+    await page.evaluate(({ mode, settings, screenshot, extra }) => window.__hspListener({ type: 'HSP_START', mode, settings, screenshot, ...(extra || {}) }, {}, () => {}), { mode, settings, screenshot, extra });
     await page.waitForFunction(() => window.__HSP__.game && window.__HSP__.game.ctx && !window.__HSP__.game.modalWrap.hidden);
   };
   const g = (fn, arg) => page.evaluate(fn, arg);
@@ -243,6 +255,24 @@ async function main() {
     await page.mouse.click(1097, 195); // centre of the solid "Violet" card
     const picked = await g(() => window.__HSP__.game.color);
     assert.equal(picked, '#8338ec');
+    // Colour picker panel: behind-the-slab swatches, shade square, hue strip, hex entry.
+    await sh().locator('.colorbtn').click();
+    assert.equal(await sh().locator('.palette').isVisible(), true);
+    const behind = await sh().locator('.palette .swatch').count();
+    assert.ok(behind >= 2, `palette from the page behind the slab (${behind} colours)`);
+    const firstBehind = await sh().locator('.palette .swatch').first().getAttribute('title');
+    await sh().locator('.palette .swatch').first().click();
+    assert.equal(await g(() => window.__HSP__.game.color), firstBehind);
+    const slBox = await sh().locator('.palette canvas').first().boundingBox();
+    await page.mouse.click(slBox.x + slBox.width * 0.9, slBox.y + slBox.height * 0.5);
+    const afterSl = await g(() => ({ color: window.__HSP__.game.color, hsl: window.__HSP__.game.hsl }));
+    assert.ok(afterSl.hsl[1] > 0.85 && Math.abs(afterSl.hsl[2] - 0.5) < 0.08, 'shade square sets saturation/lightness');
+    await sh().locator('.palette input.hex').fill('#123456');
+    await sh().locator('.palette input.hex').press('Enter');
+    await sh().locator('.palette input.hex').dispatchEvent('change');
+    assert.equal(await g(() => window.__HSP__.game.color), '#123456');
+    await sh().locator('.palette .close').click();
+    assert.equal(await sh().locator('.palette').isVisible(), false);
     // Brush a stroke across the slab.
     await page.keyboard.press('b');
     const cx = s1.x + s1.w / 2, cy = s1.y + s1.h / 2;
@@ -268,7 +298,7 @@ async function main() {
     assert.deepEqual(await centrePx(), [0, 255, 0, 255], 'fill painted the centre green');
     await page.keyboard.press('Control+z');
     assert.notDeepEqual(await centrePx(), [0, 255, 0, 255], 'undo restored the previous pixels');
-    assert.equal(await g(() => window.__HSP__.game.recent.length), 2, 'recent swatches recorded');
+    assert.ok(await g(() => window.__HSP__.game.recent.length >= 2), 'recent swatches recorded');
     // Stamp the entire slab for a near-perfect camo (ink allows 30%), then check score improves with fill of sampled colour.
     await page.keyboard.press('e');
     await page.mouse.click(cx, cy);
@@ -302,6 +332,19 @@ async function main() {
     const kinds = await g(() => { const gm = window.__HSP__.game, s = gm.slabs[0]; const seen = []; for (let i = 0; i < 6; i++) { gm.slabPose(s, performance.now()); seen.push(s.poseState.pose.kind); s.poseState.pose.dur = 0; } return seen; });
     assert.ok(new Set(kinds).size >= 3, `poses vary: ${kinds.join(',')}`);
     for (let i = 1; i < kinds.length; i++) assert.notEqual(kinds[i], kinds[i - 1], 'consecutive poses differ');
+    // Tilt sweeps the page in 3D for a moment, costs 8 s and pauses guessing.
+    const beforeTilt = await g(() => window.__HSP__.game.timeLeft());
+    await clickBtn('Tilt');
+    await page.waitForTimeout(400);
+    const tilt = await g(() => { const gm = window.__HSP__.game; gm.render(); return { transform: gm.board.style.transform, angles: gm.tiltAngles, left: gm.timeLeft() }; });
+    assert.match(tilt.transform, /rotateY\(-?\d/);
+    assert.ok(tilt.angles && Math.abs(tilt.angles.ry) > 0.05, 'board is rotated');
+    assert.ok(tilt.left < beforeTilt - 7500, 'tilt costs 8 s');
+    const sl = await g(() => { const s = window.__HSP__.game.slabs[0]; return { cx: s.x + s.w / 2, cy: s.y + s.h / 2 }; });
+    await page.mouse.click(sl.cx, sl.cy);
+    assert.equal(await g(() => window.__HSP__.game.slabs[0].found), false, 'no guessing while tilted');
+    await page.waitForTimeout(2600);
+    assert.equal(await g(() => { const gm = window.__HSP__.game; gm.render(); return gm.board.style.transform; }), '', 'board flat again');
     await shot('hotseat-seek.png');
     await page.mouse.click(100, 700); // miss
     assert.equal(await g(() => window.__HSP__.game.guessesUsed), 1);
@@ -392,7 +435,7 @@ async function main() {
     assert.match(await sh().locator('.modal').textContent(), /Not found/);
   });
 
-  let code;
+  let code, shareLink;
   await step('hide-share: produces a decodable code', async () => {
     await start('hide-share', { difficulty: 'normal', seekTime: 30, guesses: 5, hideTime: 0 });
     await sh().locator('.choice', { hasText: 'Ghost' }).click();
@@ -402,9 +445,15 @@ async function main() {
     await page.mouse.move(s.x + 10, s.y + 20); await page.mouse.down(); await page.mouse.move(s.x + s.w - 10, s.y + s.h - 20, { steps: 6 }); await page.mouse.up();
     await clickBtn('Hide it!');
     await page.waitForFunction(() => window.__HSP__.game.phase === 'share');
-    code = await sh().locator('textarea.code').inputValue();
+    code = await sh().locator('textarea.code:not(.link)').inputValue();
     assert.ok(code.startsWith('HSP1.'));
+    const link = await sh().locator('textarea.code.link').inputValue();
+    assert.ok(link.startsWith(url + '#hsp1='), `link points at the page: ${link.slice(0, 60)}`);
+    assert.equal(await g((l) => window.HSP.parseShareLink(l), link), code, 'link carries the code');
+    console.log(`     share link size: ${(link.length / 1024).toFixed(1)} KB`);
     const level = await g((c) => window.HSP.decodeShareCode(c), code);
+    assert.ok(level.slabs[0].img.startsWith('data:image/webp'), 'slab image is WebP');
+    shareLink = link;
     assert.equal(level.slabs.length, 1);
     assert.equal(level.slabs[0].shape, 'ghost');
     assert.equal(level.seekTime, 30);
@@ -418,8 +467,12 @@ async function main() {
     await sh().locator('textarea.code').fill('garbage');
     await clickBtn('Start seeking');
     await page.waitForFunction(() => /Not a Hide/.test(document.querySelector('#hsp-host').shadowRoot.querySelector('.modal').textContent));
-    await sh().locator('textarea.code').fill(code);
+    await sh().locator('textarea.code').fill(shareLink);
     await clickBtn('Start seeking');
+    await page.waitForFunction(() => /Ready to seek/.test(document.querySelector('#hsp-host').shadowRoot.querySelector('.modal').textContent));
+    await clickBtn('Back');
+    // Launched from a link (the popup passes the code): no textarea, straight to Ready.
+    await start('seek-code', { difficulty: 'normal', seekTime: 45, guesses: 3, hideTime: 0 }, { code: shareLink });
     await page.waitForFunction(() => /Ready to seek/.test(document.querySelector('#hsp-host').shadowRoot.querySelector('.modal').textContent));
     assert.equal(await g(() => window.__HSP__.game.settings.seekTime), 30, 'seek time taken from the code');
     await clickBtn('Go!');
@@ -594,6 +647,22 @@ async function main() {
     await demo.waitForFunction(() => window.__demo && window.__demo.listener());
     await demo.click('#scenes button[data-scene="wiki"]');
     assert.equal(await demo.locator('#pageCount').textContent(), '1', 'hider survives a reload');
+    // A share link made in the demo reopens the same fake page and seeks straight away.
+    await demo.click('.mode[data-mode="hide-share"]');
+    await demo.waitForFunction(() => window.__HSP__.game && !window.__HSP__.game.modalWrap.hidden);
+    await dh.locator('button', { hasText: 'Start painting' }).click();
+    await dh.locator('button', { hasText: 'Hide it!' }).click();
+    await demo.waitForFunction(() => document.getElementById('hsp-host').shadowRoot.querySelector('textarea.code.link'));
+    const demoLink = await dh.locator('textarea.code.link').inputValue();
+    assert.ok(demoLink.startsWith(url.replace('/arena', '/demo') + '#hsp1='), 'demo links point at the demo page');
+    await demo.goto(demoLink);
+    await demo.reload();
+    await demo.waitForFunction(() => { const h = document.getElementById('hsp-host'); const m = h && h.shadowRoot.querySelector('.modal'); return Boolean(window.__HSP__ && window.__HSP__.game && m && /Ready to seek/.test(m.textContent)); }, null, { timeout: 8000 });
+    assert.equal(await demo.evaluate(() => window.__demo.scene()), 'wiki', 'link restored the fake page');
+    await dh.locator('button', { hasText: 'Go!' }).click();
+    const ls = await demo.evaluate(() => { const s = window.__HSP__.game.slabs[0]; return { x: s.x, y: s.y, w: s.w, h: s.h }; });
+    await demo.mouse.click(ls.x + ls.w / 2, ls.y + ls.h / 2);
+    await demo.waitForFunction(() => window.__HSP__.game.phase === 'result');
     assert.deepEqual(errors, [], 'no page errors in the demo');
     await demo.close();
   });

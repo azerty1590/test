@@ -64,10 +64,12 @@ async function refreshBadge(tabId, url) {
   if (tabId == null) return;
   let count = 0;
   if (url && /^https?:/i.test(url)) count = (await getPage(url)).slabs.length;
+  // A share link in the address bar outranks the count: someone is hiding in it.
+  const hasLink = Boolean(url && HSP.parseShareLink(url));
   try {
-    await chrome.action.setBadgeBackgroundColor({ tabId, color: '#7cf2a7' });
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: hasLink ? '#ff8bd1' : '#7cf2a7' });
     if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ tabId, color: '#0c1a12' });
-    await chrome.action.setBadgeText({ tabId, text: count ? String(count) : '' });
+    await chrome.action.setBadgeText({ tabId, text: hasLink ? '!' : count ? String(count) : '' });
   } catch { /* tab may be gone */ }
 }
 
