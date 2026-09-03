@@ -71,6 +71,7 @@ async function main() {
   const server = http.createServer((req, res) => {
     if (req.url.startsWith('/strict.css')) { res.setHeader('content-type', 'text/css'); return res.end(STRICT_CSS); }
     if (req.url.startsWith('/photo.svg')) { res.setHeader('content-type', 'image/svg+xml'); return res.end(PHOTO); }
+    if (req.url.startsWith('/demo')) { res.setHeader('content-type', 'text/html'); return res.end(fs.readFileSync(path.join(ROOT, 'demo/index.html'))); }
     if (req.url.startsWith('/strict')) {
       res.setHeader('content-type', 'text/html');
       res.setHeader('content-security-policy', STRICT_CSP);
@@ -223,8 +224,10 @@ async function main() {
   await step('hotseat: paint with brush/eyedropper/stamp, camo score, hide, seek, find', async () => {
     await start('hotseat', { difficulty: 'normal', seekTime: 45, guesses: 3, hideTime: 90 });
     await sh().locator('.choice', { hasText: 'Splat' }).click();
+    await sh().locator('.choice', { hasText: 'Nervous' }).click();
     await clickBtn('Start painting');
     await page.waitForFunction(() => window.__HSP__.game.phase === 'paint');
+    assert.equal(await g(() => window.__HSP__.game.active.persona), 'nervous');
     const s0 = await g(() => { const s = window.__HSP__.game.slabs[0]; return { x: s.x, y: s.y, w: s.w, h: s.h, camo: s.camo }; });
     // Drag the slab onto the striped card with Shift.
     await page.keyboard.down('Shift');
@@ -295,6 +298,10 @@ async function main() {
       changed = await g(() => { const gm = window.__HSP__.game, s = gm.slabs[0], S = gm.S; gm.render(); const d = gm.ctx.getImageData(Math.round((s.x - 12) * S), Math.round((s.y - 12) * S), Math.round((s.w + 24) * S), Math.round((s.h + 24) * S)).data; let n = 0; for (let k = 0; k < d.length; k++) if (d[k] !== window.__p1[k]) n++; return n; });
     }
     assert.ok(changed >= 50, `slab pixels change while it wobbles (${changed} changed)`);
+    // The persona walks through different poses; force the clock to see several.
+    const kinds = await g(() => { const gm = window.__HSP__.game, s = gm.slabs[0]; const seen = []; for (let i = 0; i < 6; i++) { gm.slabPose(s, performance.now()); seen.push(s.poseState.pose.kind); s.poseState.pose.dur = 0; } return seen; });
+    assert.ok(new Set(kinds).size >= 3, `poses vary: ${kinds.join(',')}`);
+    for (let i = 1; i < kinds.length; i++) assert.notEqual(kinds[i], kinds[i - 1], 'consecutive poses differ');
     await shot('hotseat-seek.png');
     await page.mouse.click(100, 700); // miss
     assert.equal(await g(() => window.__HSP__.game.guessesUsed), 1);
@@ -402,6 +409,7 @@ async function main() {
     assert.equal(level.slabs[0].shape, 'ghost');
     assert.equal(level.seekTime, 30);
     assert.equal(level.wobble, 'normal');
+    assert.equal(level.slabs[0].persona, 'sneaky');
     await shot('share.png');
   });
 
@@ -535,6 +543,59 @@ async function main() {
     assert.deepEqual(cspViolations, [], 'the game triggered no CSP violations');
     await strict.screenshot({ path: path.join(OUT, 'strict-wiki-paint.png') });
     await strict.close();
+  });
+
+  await step('web demo: fake pages as arenas, modes launch the real engine, hides persist in localStorage', async () => {
+    const demo = await context.newPage();
+    const errors = [];
+    demo.on('pageerror', (e) => errors.push(e.message));
+    await demo.goto(url.replace('/arena', '/demo'));
+    await demo.waitForFunction(() => window.__demo && window.__demo.listener() && window.__HSP__);
+    assert.equal(await demo.locator('#scenes button').count(), 4);
+    assert.equal(await demo.locator('.mode').count(), 5);
+    await demo.screenshot({ path: path.join(OUT, 'demo-tube.png') });
+    // Scene switch redraws the arena.
+    const px = (p) => p.evaluate(() => { const c = document.getElementById('scene'); return Array.from(c.getContext('2d').getImageData(c.width >> 1, c.height >> 1, 1, 1).data); });
+    const tubePx = await px(demo);
+    await demo.click('#scenes button[data-scene="wiki"]');
+    assert.notDeepEqual(await px(demo), tubePx, 'encyclopedia scene differs from the video site');
+    await demo.screenshot({ path: path.join(OUT, 'demo-wiki.png') });
+    // Chameleon Hunt on the encyclopedia scene.
+    await demo.selectOption('#sound', 'off');
+    await demo.click('.mode[data-mode="solo"]');
+    await demo.waitForFunction(() => window.__HSP__.game && window.__HSP__.game.ctx && !window.__HSP__.game.modalWrap.hidden);
+    assert.equal(await demo.evaluate(() => window.__HSP__.game.S), 2, 'snapshot is taken at device resolution');
+    assert.equal(await demo.evaluate(() => window.__HSP__.game.pageUrl), 'https://demo.hidepaint.local/wiki');
+    assert.equal(await demo.locator('#launcher').isHidden(), true, 'launcher steps aside during play');
+    const dh = demo.locator('#hsp-host');
+    await dh.locator('button', { hasText: 'Start round' }).click();
+    const slabs = await demo.evaluate(() => window.__HSP__.game.slabs.map((s) => ({ x: s.x, y: s.y, w: s.w, h: s.h })));
+    assert.equal(slabs.length, 3);
+    await demo.screenshot({ path: path.join(OUT, 'demo-hunt.png') });
+    for (const s of slabs) await demo.mouse.click(s.x + s.w / 2, s.y + s.h / 2);
+    await demo.waitForFunction(() => window.__HSP__.game.phase === 'result');
+    await dh.locator('button', { hasText: 'Quit' }).first().click();
+    await demo.waitForFunction(() => !document.getElementById('hsp-host'));
+    await demo.waitForFunction(() => !document.getElementById('launcher').hidden, null, { timeout: 3000 });
+    assert.match(await demo.locator('#stats').textContent(), /1 rounds · 3 found/);
+    // Hide & Share keeps the slab on the demo page (localStorage), and the count shows in the launcher.
+    await demo.click('.mode[data-mode="hide-share"]');
+    await demo.waitForFunction(() => window.__HSP__.game && !window.__HSP__.game.modalWrap.hidden);
+    await dh.locator('button', { hasText: 'Start painting' }).click();
+    await dh.locator('button', { hasText: 'Hide it!' }).click();
+    await demo.waitForFunction(() => /1 hider here/.test(document.getElementById('hsp-host').shadowRoot.querySelector('.modal').textContent), null, { timeout: 5000 });
+    await dh.locator('button', { hasText: 'Quit' }).first().click();
+    await demo.waitForFunction(() => !document.getElementById('launcher').hidden, null, { timeout: 3000 });
+    assert.equal(await demo.locator('#pageCount').textContent(), '1');
+    assert.equal(await demo.locator('#seekPage').isDisabled(), false);
+    const stored = await demo.evaluate(() => JSON.parse(localStorage.getItem('hsp-demo')));
+    assert.equal(Object.keys(stored.pages).length, 1);
+    await demo.reload();
+    await demo.waitForFunction(() => window.__demo && window.__demo.listener());
+    await demo.click('#scenes button[data-scene="wiki"]');
+    assert.equal(await demo.locator('#pageCount').textContent(), '1', 'hider survives a reload');
+    assert.deepEqual(errors, [], 'no page errors in the demo');
+    await demo.close();
   });
 
   await step('escape asks before quitting; leaving removes the overlay', async () => {

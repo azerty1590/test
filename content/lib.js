@@ -22,6 +22,69 @@
   // Idle wobble presets (degrees) for hot-seat and share rounds.
   const WOBBLE = { still: 0, subtle: 6, normal: 12, lively: 20 };
 
+  // A hidden slab is a persona, not a sticker: over time it adopts different
+  // poses. Personas set how restless it is; `speed` shortens pose durations.
+  const PERSONAS = {
+    statue:  { label: 'Statue',  hint: 'almost never moves',      weights: { still: 0.7,  sway: 0.2,  shift: 0.05, twist: 0.05, peek: 0 },    speed: 0.7 },
+    sneaky:  { label: 'Sneaky',  hint: 'shifts now and then',     weights: { still: 0.35, sway: 0.35, shift: 0.12, twist: 0.1,  peek: 0.08 }, speed: 1 },
+    nervous: { label: 'Nervous', hint: 'cannot sit still',        weights: { still: 0.15, sway: 0.35, shift: 0.2,  twist: 0.15, peek: 0.15 }, speed: 1.4 },
+  };
+  const POSE_DURATION = { still: [2, 6], sway: [2, 5], shift: [2, 4], twist: [2, 4], peek: [0.5, 0.8] };
+
+  // Picks the next pose for a persona, never repeating the previous kind.
+  function nextPose(rnd, persona, prevKind) {
+    const P = PERSONAS[persona] || PERSONAS.sneaky;
+    let entries = Object.entries(P.weights).filter(([k, w]) => w > 0 && k !== prevKind);
+    if (!entries.length) entries = Object.entries(P.weights).filter(([, w]) => w > 0);
+    const total = entries.reduce((a, [, w]) => a + w, 0);
+    let r = rnd() * total;
+    let kind = entries[entries.length - 1][0];
+    for (const [k, w] of entries) {
+      r -= w;
+      if (r <= 0) { kind = k; break; }
+    }
+    const [lo, hi] = POSE_DURATION[kind];
+    const ang = rnd() * Math.PI * 2;
+    return { kind, dur: (lo + rnd() * (hi - lo)) / P.speed, dir: [Math.cos(ang), Math.sin(ang)], sign: rnd() < 0.5 ? -1 : 1 };
+  }
+
+  // Transform for a pose at local time `tl` (seconds since it began), scaled by
+  // the wobble amplitude: tilt (ry, rx), in-plane twist (rz, radians), offset
+  // (ox, oy, CSS px) and lift (scale delta). Poses ease in and out.
+  function poseTransform(pose, tl, ampDeg, t, phase) {
+    const out = { ry: 0, rx: 0, rz: 0, ox: 0, oy: 0, lift: 0 };
+    if (!pose || !ampDeg || pose.kind === 'still') return out;
+    const k = ampDeg / 12;
+    const env = clamp(Math.min(tl / 0.6, (pose.dur - tl) / 0.6, 1), 0, 1);
+    switch (pose.kind) {
+      case 'sway': {
+        const a = wobbleAngles(t, phase, ampDeg);
+        out.ry = a.ry * env; out.rx = a.rx * env;
+        break;
+      }
+      case 'shift': {
+        const d = 5 * k;
+        out.ox = pose.dir[0] * d * env; out.oy = pose.dir[1] * d * env;
+        const a = wobbleAngles(t, phase, ampDeg * 0.4);
+        out.ry = a.ry * env; out.rx = a.rx * env;
+        break;
+      }
+      case 'twist':
+        out.rz = (pose.sign * 3.5 * k * Math.PI / 180) * env;
+        break;
+      case 'peek': {
+        const p = Math.sin(Math.PI * clamp(tl / pose.dur, 0, 1));
+        out.lift = 0.06 * k * p;
+        const a = wobbleAngles(t * 3, phase, ampDeg * 2);
+        out.ry = a.ry * p; out.rx = a.rx * p;
+        break;
+      }
+      default:
+        break;
+    }
+    return out;
+  }
+
   // Stamp ink presets: fraction of the slab area that may be pixel-copied.
   const STAMP_INK = { '30': 0.3, '60': 0.6, unlimited: Infinity };
 
@@ -303,6 +366,10 @@
     DIFFICULTY,
     WOBBLE,
     STAMP_INK,
+    PERSONAS,
+    POSE_DURATION,
+    nextPose,
+    poseTransform,
     wobbleAngles,
     clamp,
     hexToRgb,

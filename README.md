@@ -51,6 +51,12 @@ Real pages are not textured walls. Wikipedia and Reddit are mostly empty white o
 - **Hi-DPI performance.** The arena canvas stays GPU-backed; all pixel reads go to the snapshot and slab canvases, so 4K displays at 2x scale paint smoothly.
 - **A little 3D.** Hidden slabs idle in 3D (see above), found slabs pop out and flip once with a drop shadow, and unfound slabs pulse on the result screen. Cheap, canvas-only, no library.
 
+## Try it without installing
+
+`demo/index.html` is a standalone web version: open it in any browser (or serve the folder) and the same engine plays on procedurally drawn fake pages, a video site, an encyclopedia article and a social feed, or on any screenshot you choose, paste or drop onto it. Hidden slabs, settings and stats persist in the browser's local storage. Rebuild it after changing the engine with `npm run demo`.
+
+`dist/hide-seek-paint.zip` is the packaged extension: unzip it and load the folder as described below. Chrome only installs `.crx` files from the Web Store, so an unpacked folder is the way to run it outside the store.
+
 ## Install (unpacked)
 
 1. Clone this repository.
@@ -72,7 +78,8 @@ Pages the browser refuses to capture (`chrome://`, the Web Store) cannot be used
 npm test          # unit tests for the pure game logic (content/lib.js)
 npm run smoke     # headless-Chromium end-to-end run of every mode (needs playwright + chromium)
 npm run icons     # regenerate icons/*.png
-npm run pack      # zip the extension for distribution
+npm run demo      # rebuild demo/index.html and demo/artifact.html from the engine
+npm run pack      # rebuild the demo and zip the extension into dist/
 ```
 
 The smoke test loads the unpacked extension into headless Chromium at device scale factor 2, checks the service worker and popup, then plays every mode against a locally served page. Playwright is resolved from `NODE_PATH` if it is installed globally:
@@ -90,5 +97,8 @@ popup/               toolbar popup: mode picker, settings, stats
 content/lib.js       pure helpers (scoring, placement, share codes)
 content/game.js      in-page game (shadow DOM overlay, paint tools, seeking, solo hunt)
 scripts/make-icons.js dependency-free PNG icon generator
+scripts/build-demo.js inlines the engine into the standalone web demo
+demo/template.html   launcher UI, fake page renderers and the runtime shim for the demo
+dist/                packaged extension zip
 tests/               node:test unit tests
 ```

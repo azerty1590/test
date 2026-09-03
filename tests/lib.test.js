@@ -166,3 +166,38 @@ test('pageKey ignores the hash but keeps origin, path and query', () => {
   assert.notEqual(L.pageKey('https://www.youtube.com/watch?v=abc'), L.pageKey('https://www.youtube.com/watch?v=def'));
   assert.equal(L.pageKey('not a url'), 'not a url');
 });
+
+test('personas cycle through poses that never repeat and stay within bounds', () => {
+  const rnd = L.mulberry32(9);
+  const kinds = new Set();
+  let prev = null;
+  for (let i = 0; i < 200; i++) {
+    const p = L.nextPose(rnd, 'nervous', prev);
+    assert.notEqual(p.kind, prev, 'no immediate repeat');
+    assert.ok(p.dur > 0 && p.dur <= 6);
+    kinds.add(p.kind);
+    prev = p.kind;
+  }
+  assert.deepEqual([...kinds].sort(), ['peek', 'shift', 'still', 'sway', 'twist']);
+  const statueStill = Array.from({ length: 300 }, () => L.nextPose(rnd, 'statue', null).kind).filter((k) => k === 'still').length;
+  assert.ok(statueStill > 150, 'a statue mostly stays still');
+  assert.equal(Array.from({ length: 300 }, () => L.nextPose(rnd, 'statue', null).kind).includes('peek'), false, 'statues never peek');
+  const still = L.poseTransform({ kind: 'still', dur: 3 }, 1, 12, 5, 0.3);
+  assert.deepEqual(still, { ry: 0, rx: 0, rz: 0, ox: 0, oy: 0, lift: 0 });
+  for (const kind of ['sway', 'shift', 'twist', 'peek']) {
+    const pose = { kind, dur: 3, dir: [1, 0], sign: 1 };
+    let maxOff = 0, maxRz = 0, maxLift = 0, moved = false;
+    for (let tl = 0; tl <= 3; tl += 0.1) {
+      const o = L.poseTransform(pose, tl, 12, 10 + tl, 0.7);
+      maxOff = Math.max(maxOff, Math.hypot(o.ox, o.oy));
+      maxRz = Math.max(maxRz, Math.abs(o.rz));
+      maxLift = Math.max(maxLift, o.lift);
+      if (Math.abs(o.ry) + Math.abs(o.rx) + Math.abs(o.rz) + Math.abs(o.ox) + o.lift > 1e-3) moved = true;
+    }
+    assert.ok(moved, `${kind} moves`);
+    assert.ok(maxOff <= 5.01 && maxRz <= 3.5 * Math.PI / 180 + 1e-9 && maxLift <= 0.061, `${kind} stays subtle`);
+    const atStart = L.poseTransform(pose, 0, 12, 10, 0.7);
+    if (kind !== 'peek') assert.ok(Math.abs(atStart.ox) + Math.abs(atStart.rz) + Math.abs(atStart.ry) < 1e-9, `${kind} eases in from rest`);
+  }
+  assert.equal(L.poseTransform({ kind: 'shift', dur: 3, dir: [1, 0] }, 1.5, 0, 1, 0).ox, 0, 'still setting disables poses');
+});

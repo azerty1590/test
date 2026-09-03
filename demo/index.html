@@ -1,3 +1,581 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+</head>
+<body>
+<!-- Hide & Seek Paint web demo v1.0.0. Built by scripts/build-demo.js from content/lib.js + content/game.js; do not edit by hand. -->
+<title>Hide & Seek Paint</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;800&display=swap">
+<style>
+  :root {
+    --ink: #12131a; --panel: rgba(20, 22, 32, .94); --panel-2: #262a3b; --line: rgba(255,255,255,.1);
+    --text: #f1f2f8; --muted: #9a9fb8; --mint: #7cf2a7; --pink: #ff8bd1; --danger: #ff6b6b;
+    --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+    --body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--ink); color: var(--text); font: 14px/1.4 var(--body); overflow: hidden; }
+  #scene { position: fixed; inset: 0; display: block; }
+  #drop { position: fixed; inset: 0; display: none; place-items: center; background: rgba(18,19,26,.85); font: 600 22px var(--display); color: var(--mint); pointer-events: none; z-index: 5; }
+  #drop.on { display: grid; }
+  .launcher {
+    position: fixed; left: 16px; bottom: 16px; z-index: 10; width: 392px; max-height: calc(100vh - 32px); overflow: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 16px 18px 14px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.55); backdrop-filter: blur(10px); scrollbar-width: thin;
+  }
+  .launcher[hidden] { display: none; }
+  .head { display: flex; align-items: center; gap: 12px; }
+  .head .logo { font-size: 30px; line-height: 1; }
+  .head h1 { margin: 0; font: 800 20px/1.1 var(--display); letter-spacing: -.01em; }
+  .head p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+  .head .collapse { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 8px; padding: 6px 8px; cursor: pointer; font: inherit; }
+  .label { margin: 14px 0 6px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: var(--panel-2); padding: 4px; border-radius: 10px; }
+  .seg button { border: 0; background: transparent; color: var(--muted); padding: 8px 4px; border-radius: 7px; cursor: pointer; font: 600 12px var(--body); }
+  .seg button.on { background: var(--mint); color: #0c1a12; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .mode {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left;
+    padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); color: var(--text); cursor: pointer; font: inherit;
+    transition: transform .08s, border-color .12s;
+  }
+  .mode:hover { border-color: var(--mint); transform: translateY(-1px); }
+  .mode:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+  .mode .icon { font-size: 18px; }
+  .mode .name { font-weight: 700; }
+  .mode .hint { color: var(--muted); font-size: 11px; }
+  .mode.wide { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 10px; }
+  .mode.wide .count { margin-left: auto; font: 800 22px/1 var(--display); color: var(--mint); font-variant-numeric: tabular-nums; }
+  .settings { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+  .settings label { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+  .settings select { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 4px 6px; font: inherit; max-width: 120px; }
+  .shot { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .shot input { display: none; }
+  .btn { appearance: none; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); padding: 8px 12px; border-radius: 9px; font: 600 13px var(--body); cursor: pointer; }
+  .btn.primary { background: var(--mint); color: #0c1a12; border-color: transparent; }
+  .foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+  .foot a { color: var(--mint); text-decoration: none; font-weight: 600; }
+  .foot a:hover { text-decoration: underline; }
+  .stats { font-variant-numeric: tabular-nums; }
+  .status { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: #3a1f28; color: #ffb3b3; font-size: 12px; }
+  .status[hidden] { display: none; }
+  #restore { position: fixed; left: 16px; bottom: 16px; z-index: 10; width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); color: var(--text); font-size: 26px; cursor: pointer; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+  #restore[hidden] { display: none; }
+  button:focus-visible, select:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+  @media (max-width: 560px) {
+    .launcher { left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 72vh; padding: 12px 14px; border-radius: 16px; }
+    .seg button { padding: 10px 2px; font-size: 11px; }
+    .settings select { max-width: 110px; }
+    .mode { min-height: 44px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .mode { transition: none; } }
+</style>
+
+<canvas id="scene" aria-label="Fake web page used as the arena"></canvas>
+<div id="drop">Drop a screenshot to use it as the arena</div>
+<button id="restore" hidden title="Show the launcher">🦎</button>
+
+<section class="launcher" id="launcher" aria-label="Hide & Seek Paint demo launcher">
+  <div class="head">
+    <div class="logo">🦎</div>
+    <div>
+      <h1>Hide &amp; Seek Paint</h1>
+      <p>Web demo on fake pages. The extension plays on real ones.</p>
+    </div>
+    <button class="collapse" id="collapse" title="Hide the launcher and look at the page">Hide</button>
+  </div>
+
+  <div class="label">Arena</div>
+  <div class="seg" id="scenes" role="tablist">
+    <button data-scene="tube" class="on" role="tab">Video site</button>
+    <button data-scene="wiki" role="tab">Encyclopedia</button>
+    <button data-scene="feed" role="tab">Social feed</button>
+    <button data-scene="shot" role="tab">Your screenshot</button>
+  </div>
+  <div class="shot" id="shotRow" hidden style="margin-top:8px">
+    <label class="btn">Choose image… <input type="file" id="file" accept="image/*"></label>
+    <span style="color:var(--muted);font-size:12px">or paste / drop a screenshot anywhere</span>
+  </div>
+
+  <div class="label">Play</div>
+  <div class="modes">
+    <button class="mode wide" data-mode="seek-page" id="seekPage" disabled><span class="icon">🙈</span><span><span class="name">Seek on this page</span><br><span class="hint">Hunt every slab kept hidden here</span></span><span class="count" id="pageCount">0</span></button>
+    <button class="mode" data-mode="hotseat"><span class="icon">🎨</span><span class="name">Hide &amp; Seek</span><span class="hint">One hides, one seeks. Pass the device.</span></button>
+    <button class="mode" data-mode="solo"><span class="icon">🔍</span><span class="name">Chameleon Hunt</span><span class="hint">Solo. Spot the camouflaged slabs.</span></button>
+    <button class="mode" data-mode="hide-share"><span class="icon">📤</span><span class="name">Hide &amp; Share</span><span class="hint">Paint, hide, copy a code.</span></button>
+    <button class="mode" data-mode="seek-code"><span class="icon">📥</span><span class="name">Seek from Code</span><span class="hint">Paste a friend's code.</span></button>
+  </div>
+
+  <div class="label">Settings</div>
+  <div class="settings">
+    <label>Difficulty <select id="difficulty"><option value="easy">Easy</option><option value="normal" selected>Normal</option><option value="hard">Hard</option><option value="insane">Insane</option></select></label>
+    <label>Seek time <select id="seekTime"><option value="30">30 s</option><option value="45" selected>45 s</option><option value="60">60 s</option><option value="90">90 s</option></select></label>
+    <label>Guesses <select id="guesses"><option value="1">1</option><option value="3" selected>3</option><option value="5">5</option><option value="0">∞</option></select></label>
+    <label>Hide time <select id="hideTime"><option value="0">None</option><option value="60">60 s</option><option value="90" selected>90 s</option><option value="180">3 min</option></select></label>
+    <label>Hiders <select id="hiders"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option></select></label>
+    <label>Wobble <select id="wobble"><option value="still">Still</option><option value="subtle">Subtle</option><option value="normal" selected>Normal</option><option value="lively">Lively</option></select></label>
+    <label>Stamp ink <select id="stampInk"><option value="30">30 %</option><option value="60">60 %</option><option value="unlimited" selected>Unlimited</option></select></label>
+    <label>Sound <select id="sound"><option value="on" selected>On</option><option value="off">Off</option></select></label>
+  </div>
+
+  <p class="status" id="status" hidden></p>
+
+  <div class="foot">
+    <span class="stats" id="stats">No rounds yet</span>
+    <a href="https://github.com/azerty1590/test" target="_blank" rel="noopener">Get the extension →</a>
+  </div>
+</section>
+
+<script>
+/* ---------- chrome.runtime shim: storage in localStorage, snapshots from the scene canvas ---------- */
+(function () {
+  const KEY = 'hsp-demo';
+  const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } };
+  const save = (d) => { try { localStorage.setItem(KEY, JSON.stringify(d)); } catch { /* quota or private mode */ } };
+  const pageKey = (u) => { try { const x = new URL(u); return x.origin + x.pathname + x.search; } catch { return String(u); } };
+  let listener = null;
+  window.__demo = { listener: () => listener, load, save, pageKey };
+  window.chrome = window.chrome || {};
+  window.chrome.runtime = {
+    onMessage: { addListener(fn) { listener = fn; } },
+    sendMessage: async (m) => {
+      if (!m) return { ok: true };
+      const d = load();
+      d.pages = d.pages || {};
+      d.stats = d.stats || { roundsPlayed: 0, slabsFound: 0, soloBestScore: 0, bestCamo: 0 };
+      switch (m.type) {
+        case 'HSP_CAPTURE': return { ok: true, screenshot: window.__demo.snapshot(true) };
+        case 'HSP_STORE_HIDE': {
+          const k = pageKey(m.entry.url);
+          const p = d.pages[k] || (d.pages[k] = { url: m.entry.url, slabs: [] });
+          if (!p.slabs.some((s) => s.id === m.entry.slab.id)) p.slabs.push({ ...m.entry.slab, vw: m.entry.vw, vh: m.entry.vh, wobble: m.entry.wobble, t: Date.now() });
+          p.slabs = p.slabs.slice(-12);
+          save(d);
+          return { ok: true, id: m.entry.slab.id, count: p.slabs.length };
+        }
+        case 'HSP_GET_PAGE': return { ok: true, page: d.pages[pageKey(m.url)] || { url: m.url, slabs: [] } };
+        case 'HSP_REMOVE_HIDES': {
+          const p = d.pages[pageKey(m.url)];
+          if (p) { p.slabs = p.slabs.filter((s) => !m.ids.includes(s.id)); if (!p.slabs.length) delete d.pages[pageKey(m.url)]; }
+          save(d);
+          return { ok: true, count: p ? p.slabs.length : 0 };
+        }
+        case 'HSP_RECORD_STATS': {
+          const s = d.stats, x = m.stats || {};
+          s.roundsPlayed += x.rounds || 0; s.slabsFound += x.found || 0;
+          if (x.soloScore != null) s.soloBestScore = Math.max(s.soloBestScore, x.soloScore);
+          if (x.camo != null) s.bestCamo = Math.max(s.bestCamo, x.camo);
+          save(d);
+          return { ok: true };
+        }
+        default: return { ok: true };
+      }
+    },
+  };
+})();
+</script>
+<script>
+// Pure helpers shared by the in-page game. No DOM access here so the file can
+// be unit-tested with plain Node (`npm test`).
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  root.HSP = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  'use strict';
+
+  const SHAPES = ['rect', 'round', 'blob', 'ghost'];
+
+  const DIFFICULTY = {
+    // hueShift in degrees, lightShift in HSL lightness (0..1), noise in RGB units,
+    // eye radius in CSS px, srcOffset = how many px the copied pattern is nudged.
+    // wobble = idle 3D tilt amplitude in degrees (see wobbleAngles).
+    easy:   { hueShift: 10, lightShift: 0.06, noise: 8, eye: 5, srcOffset: 0, slabScale: 1.25, timePerSlab: 14, wobble: 20 },
+    normal: { hueShift: 5,  lightShift: 0.035, noise: 4, eye: 4, srcOffset: 1, slabScale: 1.0,  timePerSlab: 11, wobble: 12 },
+    hard:   { hueShift: 2.5, lightShift: 0.018, noise: 2, eye: 3, srcOffset: 2, slabScale: 0.85, timePerSlab: 9, wobble: 6 },
+    insane: { hueShift: 1,  lightShift: 0.008, noise: 1, eye: 2, srcOffset: 3, slabScale: 0.7,  timePerSlab: 8, wobble: 3 },
+  };
+
+  // Idle wobble presets (degrees) for hot-seat and share rounds.
+  const WOBBLE = { still: 0, subtle: 6, normal: 12, lively: 20 };
+
+  // A hidden slab is a persona, not a sticker: over time it adopts different
+  // poses. Personas set how restless it is; `speed` shortens pose durations.
+  const PERSONAS = {
+    statue:  { label: 'Statue',  hint: 'almost never moves',      weights: { still: 0.7,  sway: 0.2,  shift: 0.05, twist: 0.05, peek: 0 },    speed: 0.7 },
+    sneaky:  { label: 'Sneaky',  hint: 'shifts now and then',     weights: { still: 0.35, sway: 0.35, shift: 0.12, twist: 0.1,  peek: 0.08 }, speed: 1 },
+    nervous: { label: 'Nervous', hint: 'cannot sit still',        weights: { still: 0.15, sway: 0.35, shift: 0.2,  twist: 0.15, peek: 0.15 }, speed: 1.4 },
+  };
+  const POSE_DURATION = { still: [2, 6], sway: [2, 5], shift: [2, 4], twist: [2, 4], peek: [0.5, 0.8] };
+
+  // Picks the next pose for a persona, never repeating the previous kind.
+  function nextPose(rnd, persona, prevKind) {
+    const P = PERSONAS[persona] || PERSONAS.sneaky;
+    let entries = Object.entries(P.weights).filter(([k, w]) => w > 0 && k !== prevKind);
+    if (!entries.length) entries = Object.entries(P.weights).filter(([, w]) => w > 0);
+    const total = entries.reduce((a, [, w]) => a + w, 0);
+    let r = rnd() * total;
+    let kind = entries[entries.length - 1][0];
+    for (const [k, w] of entries) {
+      r -= w;
+      if (r <= 0) { kind = k; break; }
+    }
+    const [lo, hi] = POSE_DURATION[kind];
+    const ang = rnd() * Math.PI * 2;
+    return { kind, dur: (lo + rnd() * (hi - lo)) / P.speed, dir: [Math.cos(ang), Math.sin(ang)], sign: rnd() < 0.5 ? -1 : 1 };
+  }
+
+  // Transform for a pose at local time `tl` (seconds since it began), scaled by
+  // the wobble amplitude: tilt (ry, rx), in-plane twist (rz, radians), offset
+  // (ox, oy, CSS px) and lift (scale delta). Poses ease in and out.
+  function poseTransform(pose, tl, ampDeg, t, phase) {
+    const out = { ry: 0, rx: 0, rz: 0, ox: 0, oy: 0, lift: 0 };
+    if (!pose || !ampDeg || pose.kind === 'still') return out;
+    const k = ampDeg / 12;
+    const env = clamp(Math.min(tl / 0.6, (pose.dur - tl) / 0.6, 1), 0, 1);
+    switch (pose.kind) {
+      case 'sway': {
+        const a = wobbleAngles(t, phase, ampDeg);
+        out.ry = a.ry * env; out.rx = a.rx * env;
+        break;
+      }
+      case 'shift': {
+        const d = 5 * k;
+        out.ox = pose.dir[0] * d * env; out.oy = pose.dir[1] * d * env;
+        const a = wobbleAngles(t, phase, ampDeg * 0.4);
+        out.ry = a.ry * env; out.rx = a.rx * env;
+        break;
+      }
+      case 'twist':
+        out.rz = (pose.sign * 3.5 * k * Math.PI / 180) * env;
+        break;
+      case 'peek': {
+        const p = Math.sin(Math.PI * clamp(tl / pose.dur, 0, 1));
+        out.lift = 0.06 * k * p;
+        const a = wobbleAngles(t * 3, phase, ampDeg * 2);
+        out.ry = a.ry * p; out.rx = a.rx * p;
+        break;
+      }
+      default:
+        break;
+    }
+    return out;
+  }
+
+  // Stamp ink presets: fraction of the slab area that may be pixel-copied.
+  const STAMP_INK = { '30': 0.3, '60': 0.6, unlimited: Infinity };
+
+  // A hidden slab is a physical object: it never sits perfectly still. Returns
+  // the tilt around the vertical (ry) and horizontal (rx) axes in radians at
+  // time t (seconds) for a slab with its own phase. Two incommensurate sines
+  // keep the motion irregular; |ry| <= amp, |rx| <= amp / 2.
+  function wobbleAngles(t, phase, ampDeg) {
+    const amp = (ampDeg || 0) * Math.PI / 180;
+    if (!amp) return { ry: 0, rx: 0 };
+    const ry = amp * (0.6 * Math.sin((2 * Math.PI * t) / 3.1 + phase) + 0.4 * Math.sin((2 * Math.PI * t) / 1.7 + 2 * phase));
+    const rx = (amp / 2) * Math.sin((2 * Math.PI * t) / 2.3 + 3 * phase);
+    return { ry, rx };
+  }
+
+  function clamp(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+
+  function hexToRgb(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+    if (!m) return null;
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  function rgbToHex(r, g, b) {
+    return '#' + [r, g, b].map((v) => clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0')).join('');
+  }
+
+  // Perceptual-ish distance between two RGB colours (0..~765).
+  function colorDistance(a, b) {
+    const rmean = (a[0] + b[0]) / 2;
+    const dr = a[0] - b[0];
+    const dg = a[1] - b[1];
+    const db = a[2] - b[2];
+    const wr = 2 + rmean / 256;
+    const wg = 4;
+    const wb = 2 + (255 - rmean) / 256;
+    return Math.sqrt(wr * dr * dr + wg * dg * dg + wb * db * db);
+  }
+
+  // Camouflage score 0..100 from two equally sized RGBA buffers. Pixels that
+  // are transparent in the mask buffer (alpha 0) are ignored.
+  function camoScore(slabData, bgData) {
+    let total = 0;
+    let n = 0;
+    for (let i = 0; i < slabData.length; i += 4) {
+      if (slabData[i + 3] < 8) continue;
+      total += colorDistance(
+        [slabData[i], slabData[i + 1], slabData[i + 2]],
+        [bgData[i], bgData[i + 1], bgData[i + 2]]
+      );
+      n++;
+    }
+    if (!n) return 0;
+    const mean = total / n;
+    // A mean weighted distance of ~280 is "completely different"; anything
+    // under ~30 is hard to see with the naked eye.
+    return clamp(Math.round(100 * (1 - mean / 280)), 0, 100);
+  }
+
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h = 0, s = 0;
+    const l = (max + min) / 2;
+    if (max !== min) {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      switch (max) {
+        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+        case g: h = (b - r) / d + 2; break;
+        default: h = (r - g) / d + 4;
+      }
+      h /= 6;
+    }
+    return [h, s, l];
+  }
+
+  function hslToRgb(h, s, l) {
+    if (s === 0) {
+      const v = Math.round(l * 255);
+      return [v, v, v];
+    }
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    return [
+      Math.round(hue2rgb(p, q, h + 1 / 3) * 255),
+      Math.round(hue2rgb(p, q, h) * 255),
+      Math.round(hue2rgb(p, q, h - 1 / 3) * 255),
+    ];
+  }
+
+  // Deterministic PRNG so solo rounds can be reproduced from a seed.
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // Visual "busyness" of an RGBA region (0 flat .. ~1 very detailed): luminance
+  // standard deviation plus horizontal gradient energy. Flat pages such as a
+  // Wikipedia margin or a Reddit background score close to 0; thumbnails and
+  // text score high. `stride` skips pixels for speed.
+  function busyness(data, w, h, stride) {
+    stride = Math.max(1, stride || 2);
+    let n = 0, sum = 0, sum2 = 0, grad = 0, gn = 0;
+    for (let y = 0; y < h; y += stride) {
+      let prev = -1;
+      for (let x = 0; x < w; x += stride) {
+        const i = (y * w + x) * 4;
+        const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        sum += lum;
+        sum2 += lum * lum;
+        n++;
+        if (prev >= 0) { grad += Math.abs(lum - prev); gn++; }
+        prev = lum;
+      }
+    }
+    if (!n) return 0;
+    const mean = sum / n;
+    const sd = Math.sqrt(Math.max(0, sum2 / n - mean * mean));
+    const g = gn ? grad / gn : 0;
+    return clamp((sd / 60) * 0.6 + (g / 25) * 0.4, 0, 1);
+  }
+
+  // Below this a spot counts as "flat": hiding there hands the seeker a free hint.
+  const FLAT_THRESHOLD = 0.08;
+
+  function spotLabel(busy) {
+    if (busy < FLAT_THRESHOLD) return 'flat';
+    if (busy < 0.3) return 'ok';
+    return 'busy';
+  }
+
+  function rectsOverlap(a, b, pad) {
+    pad = pad || 0;
+    return !(a.x + a.w + pad <= b.x || b.x + b.w + pad <= a.x || a.y + a.h + pad <= b.y || b.y + b.h + pad <= a.y);
+  }
+
+  // Choose non-overlapping placements for `count` slabs inside a viewport,
+  // keeping a margin away from the HUD at the top. When `opts.rate(cand)` is
+  // given it scores candidate spots (0..1, see busyness) and busy spots are
+  // preferred; flat spots are used only when nothing else is available.
+  function planPlacements(count, vw, vh, opts) {
+    opts = opts || {};
+    const rnd = opts.random || Math.random;
+    const scale = opts.scale || 1;
+    const top = opts.topMargin != null ? opts.topMargin : 64;
+    const rate = typeof opts.rate === 'function' ? opts.rate : null;
+    const want = rate ? (opts.candidates || 16) : 1;
+    const base = clamp(Math.min(vw, vh) * 0.11, 48, 140) * scale;
+    const out = [];
+    for (let i = 0; i < count; i++) {
+      const cands = [];
+      for (let attempt = 0; attempt < 200 && cands.length < want; attempt++) {
+        const w = Math.round(base * (0.75 + rnd() * 0.6));
+        const h = Math.round(base * (0.75 + rnd() * 0.6));
+        const x = Math.round(8 + rnd() * Math.max(1, vw - w - 16));
+        const y = Math.round(top + rnd() * Math.max(1, vh - h - top - 8));
+        const cand = { x, y, w, h, shape: SHAPES[Math.floor(rnd() * SHAPES.length)] };
+        if (!out.some((o) => rectsOverlap(o, cand, 12))) cands.push(cand);
+      }
+      if (!cands.length) continue;
+      let pick = cands[0];
+      if (rate) {
+        for (const c of cands) c.busy = clamp(Number(rate(c)) || 0, 0, 1);
+        const good = cands.filter((c) => c.busy >= FLAT_THRESHOLD);
+        const pool = good.length ? good : cands;
+        const weight = (c) => 0.05 + c.busy;
+        let r = rnd() * pool.reduce((a, c) => a + weight(c), 0);
+        pick = pool[pool.length - 1];
+        for (const c of pool) {
+          r -= weight(c);
+          if (r <= 0) { pick = c; break; }
+        }
+      }
+      out.push(pick);
+    }
+    return out;
+  }
+
+  // Share codes: compact JSON -> base64url with a version prefix.
+  const CODE_PREFIX = 'HSP1.';
+
+  function encodeShareCode(level) {
+    const json = JSON.stringify(level);
+    const bytes = new TextEncoder().encode(json);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    const b64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return CODE_PREFIX + b64;
+  }
+
+  function decodeShareCode(code) {
+    const trimmed = String(code || '').replace(/\s+/g, '');
+    if (!trimmed.startsWith(CODE_PREFIX)) throw new Error('Not a Hide & Seek Paint code');
+    let b64 = trimmed.slice(CODE_PREFIX.length).replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const level = JSON.parse(new TextDecoder().decode(bytes));
+    if (!level || level.v !== 1 || !Array.isArray(level.slabs) || !level.slabs.length) {
+      throw new Error('Code is damaged or from an unsupported version');
+    }
+    for (const s of level.slabs) {
+      if (typeof s.img !== 'string' || !s.img.startsWith('data:image/png;base64,')) {
+        throw new Error('Code contains invalid slab data');
+      }
+    }
+    return level;
+  }
+
+  // Map a slab saved on one viewport onto another viewport size.
+  function rescalePlacement(slab, fromW, fromH, toW, toH) {
+    const sx = toW / fromW;
+    const sy = toH / fromH;
+    const s = Math.min(sx, sy);
+    return {
+      x: clamp(Math.round(slab.x * sx), 0, Math.max(0, toW - Math.round(slab.w * s))),
+      y: clamp(Math.round(slab.y * sy), 0, Math.max(0, toH - Math.round(slab.h * s))),
+      w: Math.max(8, Math.round(slab.w * s)),
+      h: Math.max(8, Math.round(slab.h * s)),
+    };
+  }
+
+  // Identity of a page for the "hiders on this page" registry: origin + path +
+  // query (YouTube videos differ only by ?v=), never the hash.
+  function pageKey(href) {
+    try {
+      const u = new URL(href);
+      return u.origin + u.pathname + u.search;
+    } catch {
+      return String(href || '');
+    }
+  }
+
+  function seekScore(msLeft, msTotal, guessesUsed, guessLimit, hintsUsed) {
+    if (msLeft <= 0) return 0;
+    const timePart = Math.round(700 * (msLeft / msTotal));
+    const guessPenalty = Math.max(0, guessesUsed - 1) * 60;
+    const hintPenalty = (hintsUsed || 0) * 80;
+    return Math.max(50, 300 + timePart - guessPenalty - hintPenalty);
+  }
+
+  function formatTime(ms) {
+    const s = Math.max(0, Math.ceil(ms / 1000));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return m ? `${m}:${String(r).padStart(2, '0')}` : `${r}`;
+  }
+
+  function temperatureHint(dist, prevDist) {
+    if (dist < 40) return 'Boiling! 🔥🔥';
+    if (dist < 90) return 'Hot 🔥';
+    if (prevDist == null) return dist < 200 ? 'Warm' : 'Cold ❄️';
+    if (dist < prevDist - 5) return 'Warmer ↑';
+    if (dist > prevDist + 5) return 'Colder ↓';
+    return 'Same…';
+  }
+
+  return {
+    SHAPES,
+    DIFFICULTY,
+    WOBBLE,
+    STAMP_INK,
+    PERSONAS,
+    POSE_DURATION,
+    nextPose,
+    poseTransform,
+    wobbleAngles,
+    clamp,
+    hexToRgb,
+    rgbToHex,
+    colorDistance,
+    camoScore,
+    rgbToHsl,
+    hslToRgb,
+    mulberry32,
+    busyness,
+    FLAT_THRESHOLD,
+    spotLabel,
+    rectsOverlap,
+    planPlacements,
+    encodeShareCode,
+    decodeShareCode,
+    rescalePlacement,
+    seekScore,
+    pageKey,
+    formatTime,
+    temperatureHint,
+  };
+});
+
+</script>
+<script>
 // Hide & Seek Paint - in-page game. Injected on demand into the active tab.
 // The visible viewport is snapshotted into a canvas; slabs are painted and hunted on top of it.
 (function () {
@@ -1957,3 +2535,243 @@
     return false;
   });
 })();
+
+</script>
+<script>
+/* ---------- fake pages, drawn on a canvas at device resolution ---------- */
+(function () {
+  const $ = (s) => document.querySelector(s);
+  const scene = $('#scene');
+  const sctx = scene.getContext('2d');
+  let current = 'tube';
+  let seed = 7;
+  let userImage = null;
+  const rand = (s) => { let a = s >>> 0; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
+
+  const PALETTES = [['#ff7b54', '#ffb26b'], ['#2a9d8f', '#264653'], ['#8338ec', '#3a86ff'], ['#ef476f', '#ffd166'], ['#06d6a0', '#118ab2'], ['#073b4c', '#118ab2'], ['#f4a261', '#e76f51'], ['#606c38', '#283618']];
+
+  function thumb(c, x, y, w, h, rnd, radius) {
+    const [a, b] = PALETTES[Math.floor(rnd() * PALETTES.length)];
+    c.save();
+    c.beginPath(); c.roundRect(x, y, w, h, radius); c.clip();
+    const g = c.createLinearGradient(x, y, x + w, y + h); g.addColorStop(0, a); g.addColorStop(1, b);
+    c.fillStyle = g; c.fillRect(x, y, w, h);
+    const kind = Math.floor(rnd() * 4);
+    if (kind === 0) { for (let i = 0; i < 6; i++) { c.fillStyle = `rgba(255,255,255,${0.08 + rnd() * 0.2})`; c.beginPath(); c.arc(x + rnd() * w, y + rnd() * h, 8 + rnd() * h * 0.4, 0, Math.PI * 2); c.fill(); } }
+    if (kind === 1) { c.strokeStyle = 'rgba(0,0,0,.25)'; c.lineWidth = 6; for (let i = -h; i < w + h; i += 22) { c.beginPath(); c.moveTo(x + i, y); c.lineTo(x + i + h, y + h); c.stroke(); } }
+    if (kind === 2) { for (let i = 0; i < 5; i++) { c.fillStyle = `rgba(0,0,0,${0.1 + rnd() * 0.25})`; c.fillRect(x + rnd() * w, y + rnd() * h, 20 + rnd() * w * 0.4, 12 + rnd() * h * 0.3); } }
+    if (kind === 3) { c.fillStyle = 'rgba(255,255,255,.85)'; c.beginPath(); c.arc(x + w * 0.5, y + h * 0.45, h * 0.22, 0, Math.PI * 2); c.fill(); c.fillStyle = 'rgba(0,0,0,.35)'; c.fillRect(x, y + h * 0.7, w, h * 0.3); }
+    for (let i = 0; i < 60; i++) { c.fillStyle = `rgba(255,255,255,${rnd() * 0.12})`; c.fillRect(x + rnd() * w, y + rnd() * h, 2, 2); }
+    c.restore();
+  }
+
+  function lines(c, text, x, y, maxW, lh, font, color) {
+    c.font = font; c.fillStyle = color; c.textBaseline = 'alphabetic';
+    const words = text.split(' ');
+    let line = '';
+    for (const w of words) {
+      const t = line ? line + ' ' + w : w;
+      if (c.measureText(t).width > maxW && line) { c.fillText(line, x, y); y += lh; line = w; } else line = t;
+    }
+    if (line) c.fillText(line, x, y);
+    return y + lh;
+  }
+
+  const TITLES = ['How chameleons really change colour', 'I painted myself into a wall for 24 hours', 'Camouflage tricks the military still uses', 'Octopus vanishes into coral in real time', 'Hide and seek world championship finals', 'Why your eyes miss things in plain sight', 'The physics of a perfect disguise', 'Street artist hides doors in murals', 'Snow leopard spotted after 9 hours', 'We tested 12 ghillie suits', 'Stick insects are unfair', 'Finding Wally at 100x speed'];
+  const CHANNELS = ['Nature Frame', 'Pixel Studio', 'Field Notes', 'Deep Blue', 'HSWC', 'Percept Lab', 'Optics Weekly', 'Mural Crew', 'Trail Cam', 'Gear Bench', 'Bug Facts', 'Speedrun'];
+
+  function drawTube(c, w, h, rnd) {
+    c.fillStyle = '#0f0f0f'; c.fillRect(0, 0, w, h);
+    c.fillStyle = '#202020'; c.fillRect(0, 0, w, 56);
+    c.fillStyle = '#ff3d3d'; c.beginPath(); c.roundRect(20, 17, 30, 22, 6); c.fill();
+    c.fillStyle = '#fff'; c.beginPath(); c.moveTo(31, 22); c.lineTo(31, 34); c.lineTo(42, 28); c.closePath(); c.fill();
+    c.font = '700 18px system-ui, sans-serif'; c.fillText('VidTube', 58, 35);
+    c.fillStyle = '#121212'; c.beginPath(); c.roundRect(w * 0.3, 14, w * 0.4, 30, 15); c.fill();
+    c.strokeStyle = '#303030'; c.stroke();
+    c.fillStyle = '#666'; c.font = '14px system-ui, sans-serif'; c.fillText('Search', w * 0.3 + 16, 34);
+    const rail = w > 700 ? 72 : 0;
+    if (rail) { c.fillStyle = '#0f0f0f'; c.fillRect(0, 56, rail, h - 56); for (let i = 0; i < 5; i++) { c.fillStyle = i === 0 ? '#fff' : '#aaa'; c.beginPath(); c.arc(36, 90 + i * 74, 10, 0, Math.PI * 2); c.fill(); c.fillStyle = '#aaa'; c.fillRect(24, 108 + i * 74, 24, 3); } }
+    const pad = 16, cols = Math.max(1, Math.min(4, Math.floor((w - rail - pad) / 320)));
+    const cw = (w - rail - pad * (cols + 1)) / cols, th = cw * 9 / 16;
+    let i = 0;
+    for (let y = 76; y < h; y += th + 96) {
+      for (let col = 0; col < cols; col++, i++) {
+        const x = rail + pad + col * (cw + pad);
+        thumb(c, x, y, cw, th, rnd, 12);
+        c.fillStyle = 'rgba(0,0,0,.8)'; c.beginPath(); c.roundRect(x + cw - 46, y + th - 24, 40, 18, 4); c.fill();
+        c.fillStyle = '#fff'; c.font = '600 11px system-ui, sans-serif'; c.fillText(`${8 + Math.floor(rnd() * 20)}:${String(Math.floor(rnd() * 60)).padStart(2, '0')}`, x + cw - 40, y + th - 11);
+        c.fillStyle = PALETTES[i % PALETTES.length][0]; c.beginPath(); c.arc(x + 18, y + th + 28, 18, 0, Math.PI * 2); c.fill();
+        lines(c, TITLES[i % TITLES.length], x + 48, y + th + 24, cw - 48, 20, '600 15px system-ui, sans-serif', '#f1f1f1');
+        c.font = '13px system-ui, sans-serif'; c.fillStyle = '#aaa'; c.fillText(`${CHANNELS[i % CHANNELS.length]} · ${(1 + rnd() * 900).toFixed(0)}K views · ${1 + Math.floor(rnd() * 11)} days ago`, x + 48, y + th + 68);
+      }
+    }
+  }
+
+  const WIKI_TEXT = [
+    'Camouflage is the use of any combination of materials, coloration, or illumination for concealment, either by making animals or objects hard to see, or by disguising them as something else. Examples include the leopard\'s spotted coat, the battledress of a modern soldier, and the leaf-mimic katydid\'s wings.',
+    'A third approach, motion dazzle, confuses the observer with a conspicuous pattern, making the object visible but momentarily harder to locate. The majority of camouflage methods aim for crypsis, often through a general resemblance to the background, high contrast disruptive coloration, eliminating shadow, and countershading.',
+    'In the open ocean, where there is no background, the principal methods of camouflage are transparency, silvering, and countershading, while the ability to produce light is among other things used for counter-illumination on the undersides of cephalopods such as squid.',
+    'Some animals, such as chameleons and octopuses, are capable of actively changing their skin pattern and colours, whether for camouflage or for signalling. It is possible that some plants use camouflage to evade being eaten by herbivores.',
+  ];
+
+  function drawWiki(c, w, h, rnd) {
+    c.fillStyle = '#fff'; c.fillRect(0, 0, w, h);
+    const side = w > 800 ? 176 : 0;
+    if (side) { c.fillStyle = '#f8f9fa'; c.fillRect(0, 0, side, h); c.strokeStyle = '#a2a9b1'; c.beginPath(); c.moveTo(side, 0); c.lineTo(side, h); c.stroke();
+      c.fillStyle = '#0645ad'; c.font = '13px system-ui, sans-serif'; ['Main page', 'Contents', 'Current events', 'Random article', 'About', 'Contact', 'Donate', 'Help', 'Community portal', 'Recent changes'].forEach((t, i) => c.fillText(t, 22, 120 + i * 24)); }
+    const x = side + 32, cw = Math.min(900, w - x - 32);
+    c.fillStyle = '#202122'; c.font = '28px Georgia, serif'; c.fillText('Camouflage', x, 44);
+    c.strokeStyle = '#a2a9b1'; c.beginPath(); c.moveTo(x, 54); c.lineTo(x + cw, 54); c.stroke();
+    c.fillStyle = '#54595d'; c.font = '12px system-ui, sans-serif'; c.fillText('From the free encyclopedia', x, 72);
+    const ibw = Math.min(250, cw * 0.36), ibx = x + cw - ibw;
+    c.fillStyle = '#f8f9fa'; c.fillRect(ibx, 86, ibw, 300); c.strokeStyle = '#a2a9b1'; c.strokeRect(ibx + 0.5, 86.5, ibw - 1, 299);
+    thumb(c, ibx + 8, 94, ibw - 16, (ibw - 16) * 0.68, rnd, 2);
+    c.fillStyle = '#202122'; c.font = '12px system-ui, sans-serif'; c.fillText('A leaf-tailed gecko on bark', ibx + 8, 94 + (ibw - 16) * 0.68 + 18);
+    [['Type', 'Crypsis'], ['First described', '1859'], ['Seen in', 'Animals, plants'], ['Also', 'Mimesis, dazzle']].forEach(([k, v], i) => { c.font = '600 12px system-ui, sans-serif'; c.fillText(k, ibx + 10, 94 + (ibw - 16) * 0.68 + 44 + i * 20); c.font = '12px system-ui, sans-serif'; c.fillText(v, ibx + 122, 94 + (ibw - 16) * 0.68 + 44 + i * 20); });
+    let y = 104;
+    const tw = cw - ibw - 24;
+    y = lines(c, WIKI_TEXT[0], x, y, tw, 24, '15px system-ui, sans-serif', '#202122') + 6;
+    y = lines(c, WIKI_TEXT[1], x, y, tw, 24, '15px system-ui, sans-serif', '#202122') + 14;
+    c.font = '22px Georgia, serif'; c.fillStyle = '#202122'; c.fillText('Principles', x, y); c.strokeStyle = '#a2a9b1'; c.beginPath(); c.moveTo(x, y + 8); c.lineTo(x + cw, y + 8); c.stroke(); y += 36;
+    y = lines(c, WIKI_TEXT[2], x, y, y > 400 ? cw : tw, 24, '15px system-ui, sans-serif', '#202122') + 6;
+    y = lines(c, WIKI_TEXT[3], x, y, cw, 24, '15px system-ui, sans-serif', '#202122') + 14;
+    c.font = '22px Georgia, serif'; c.fillText('See also', x, y); c.beginPath(); c.moveTo(x, y + 8); c.lineTo(x + cw, y + 8); c.stroke(); y += 34;
+    c.font = '15px system-ui, sans-serif'; c.fillStyle = '#0645ad'; ['Crypsis', 'Mimicry', 'Countershading', 'Disruptive coloration', 'Hide-and-seek'].forEach((t) => { c.fillText('•  ' + t, x + 10, y); y += 24; });
+  }
+
+  const POSTS = [
+    ['Maya Okafor', 'Painted the garage door to match the hedge. My neighbour walked straight past it twice. Art or crime? Discuss.', true],
+    ['Trail Cam Tom', 'Nine hours in the hide and the leopard was on the rock the whole time. THE WHOLE TIME.', true],
+    ['Studio Nine', 'New mural on 5th street. There is a door in it. Find it and you get a free coffee.', true],
+    ['Devi Raman', 'Reminder that stick insects have been winning at hide and seek for 120 million years.', false],
+    ['Leo Fischer', 'Kids invented a rule: you can move once per round but only when nobody is looking. Chaos.', false],
+  ];
+
+  function drawFeed(c, w, h, rnd) {
+    c.fillStyle = '#f0f2f5'; c.fillRect(0, 0, w, h);
+    c.fillStyle = '#fff'; c.fillRect(0, 0, w, 56); c.strokeStyle = '#dddfe2'; c.beginPath(); c.moveTo(0, 56.5); c.lineTo(w, 56.5); c.stroke();
+    c.fillStyle = '#1877f2'; c.beginPath(); c.arc(36, 28, 18, 0, Math.PI * 2); c.fill(); c.fillStyle = '#fff'; c.font = '700 22px system-ui, sans-serif'; c.fillText('h', 30, 36);
+    c.fillStyle = '#f0f2f5'; c.beginPath(); c.roundRect(66, 12, Math.min(260, w * 0.3), 32, 16); c.fill(); c.fillStyle = '#65676b'; c.font = '14px system-ui, sans-serif'; c.fillText('Search Hidebook', 82, 33);
+    const cw = Math.min(560, w - 32), x = (w - cw) / 2;
+    let y = 74, i = 0;
+    while (y < h && i < 8) {
+      const [name, text, hasImg] = POSTS[i % POSTS.length];
+      const ih = hasImg ? Math.round(cw * 0.5) : 0;
+      const textH = 24 * Math.ceil(c.measureText(text).width / (cw - 32) + 1);
+      const ch = 70 + textH + ih + 44;
+      c.fillStyle = '#fff'; c.beginPath(); c.roundRect(x, y, cw, ch, 8); c.fill();
+      c.fillStyle = PALETTES[(i + 3) % PALETTES.length][1]; c.beginPath(); c.arc(x + 36, y + 32, 20, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#050505'; c.font = '600 15px system-ui, sans-serif'; c.fillText(name, x + 66, y + 28);
+      c.fillStyle = '#65676b'; c.font = '12px system-ui, sans-serif'; c.fillText(`${1 + Math.floor(rnd() * 23)}h · 🌐`, x + 66, y + 46);
+      const ty = lines(c, text, x + 16, y + 84, cw - 32, 22, '15px system-ui, sans-serif', '#050505');
+      if (hasImg) thumb(c, x, ty - 6, cw, ih, rnd, 0);
+      const ry = ty - 6 + ih + 26;
+      c.fillStyle = '#65676b'; c.font = '13px system-ui, sans-serif'; c.fillText(`👍 ${12 + Math.floor(rnd() * 400)}     💬 ${Math.floor(rnd() * 60)} comments`, x + 16, ry);
+      c.strokeStyle = '#e4e6eb'; c.beginPath(); c.moveTo(x + 16, ry + 10); c.lineTo(x + cw - 16, ry + 10); c.stroke();
+      c.fillText('Like          Comment          Share', x + cw / 2 - 110, ry + 32);
+      y += ch + 16; i++;
+    }
+  }
+
+  function drawScene(newSeed) {
+    if (newSeed) seed = (seed * 16807 + 11) % 2147483647;
+    const dpr = window.devicePixelRatio || 1;
+    const w = window.innerWidth, h = window.innerHeight;
+    scene.width = Math.round(w * dpr); scene.height = Math.round(h * dpr);
+    scene.style.width = w + 'px'; scene.style.height = h + 'px';
+    sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (current === 'shot') {
+      sctx.fillStyle = '#1a1b23'; sctx.fillRect(0, 0, w, h);
+      if (userImage) {
+        const s = Math.max(w / userImage.width, h / userImage.height);
+        const iw = userImage.width * s, ih = userImage.height * s;
+        sctx.drawImage(userImage, (w - iw) / 2, (h - ih) / 2, iw, ih);
+      } else {
+        sctx.fillStyle = '#9a9fb8'; sctx.font = '600 18px system-ui, sans-serif'; sctx.textAlign = 'center';
+        sctx.fillText('Choose, paste or drop a screenshot of any page to hide on it.', w / 2, h / 2); sctx.textAlign = 'left';
+      }
+      return;
+    }
+    const rnd = rand(seed);
+    ({ tube: drawTube, wiki: drawWiki, feed: drawFeed })[current](sctx, w, h, rnd);
+  }
+
+  window.__demo.snapshot = (fresh) => { if (fresh) drawScene(true); return scene.toDataURL('image/png'); };
+  window.__demo.scene = () => current;
+
+  /* ---------- launcher ---------- */
+  const launcher = $('#launcher'), restore = $('#restore'), status = $('#status');
+  const pageUrl = () => `https://demo.hidepaint.local/${current}`;
+  const settingIds = ['difficulty', 'seekTime', 'guesses', 'hideTime', 'hiders', 'wobble', 'stampInk', 'sound'];
+  const readSettings = () => {
+    const v = (id) => document.getElementById(id).value;
+    return { difficulty: v('difficulty'), seekTime: Number(v('seekTime')), guesses: Number(v('guesses')), hideTime: Number(v('hideTime')), hiders: Number(v('hiders')), wobble: v('wobble'), stampInk: v('stampInk'), sound: v('sound') !== 'off' };
+  };
+  function showStatus(t) { status.textContent = t; status.hidden = !t; }
+
+  async function refreshCounts() {
+    const d = window.__demo.load();
+    const page = (d.pages || {})[window.__demo.pageKey(pageUrl())];
+    const n = page ? page.slabs.length : 0;
+    $('#pageCount').textContent = String(n);
+    $('#seekPage').disabled = n === 0;
+    const s = d.stats;
+    $('#stats').textContent = s && s.roundsPlayed ? `${s.roundsPlayed} rounds · ${s.slabsFound} found · best camo ${s.bestCamo}%` : 'No rounds yet';
+  }
+
+  function saveSettings() { const d = window.__demo.load(); d.settings = readSettings(); window.__demo.save(d); }
+  function loadSettings() {
+    const s = window.__demo.load().settings;
+    if (!s) return;
+    for (const id of settingIds) { const el = document.getElementById(id); if (s[id] == null) continue; el.value = id === 'sound' ? (s[id] ? 'on' : 'off') : String(s[id]); }
+  }
+  settingIds.forEach((id) => document.getElementById(id).addEventListener('change', saveSettings));
+
+  $('#scenes').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-scene]');
+    if (!b) return;
+    current = b.dataset.scene;
+    for (const x of $('#scenes').children) x.classList.toggle('on', x === b);
+    $('#shotRow').hidden = current !== 'shot';
+    drawScene(false);
+    refreshCounts();
+  });
+
+  function useImage(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    const img = new Image();
+    img.onload = () => { userImage = img; current = 'shot'; for (const x of $('#scenes').children) x.classList.toggle('on', x.dataset.scene === 'shot'); $('#shotRow').hidden = false; drawScene(false); refreshCounts(); };
+    img.src = URL.createObjectURL(file);
+  }
+  $('#file').addEventListener('change', (e) => useImage(e.target.files[0]));
+  document.addEventListener('paste', (e) => { const item = [...(e.clipboardData ? e.clipboardData.items : [])].find((i) => i.type.startsWith('image/')); if (item) useImage(item.getAsFile()); });
+  document.addEventListener('dragover', (e) => { e.preventDefault(); $('#drop').classList.add('on'); });
+  document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) $('#drop').classList.remove('on'); });
+  document.addEventListener('drop', (e) => { e.preventDefault(); $('#drop').classList.remove('on'); useImage(e.dataTransfer.files[0]); });
+
+  function start(mode) {
+    const listener = window.__demo.listener();
+    if (!listener) { showStatus('The game script did not load.'); return; }
+    if (current === 'shot' && !userImage) { showStatus('Pick a screenshot first, or choose one of the fake pages.'); return; }
+    showStatus('');
+    launcher.hidden = true; restore.hidden = true;
+    const screenshot = window.__demo.snapshot(false);
+    listener({ type: 'HSP_START', mode, settings: readSettings(), screenshot, pageUrl: pageUrl() }, {}, () => {});
+  }
+  document.querySelectorAll('.mode').forEach((b) => b.addEventListener('click', () => start(b.dataset.mode)));
+  $('#collapse').addEventListener('click', () => { launcher.hidden = true; restore.hidden = false; });
+  restore.addEventListener('click', () => { launcher.hidden = false; restore.hidden = true; });
+
+  // When the game overlay goes away, bring the launcher back and refresh counts.
+  new MutationObserver(() => { if (!document.getElementById('hsp-host') && restore.hidden && launcher.hidden) { launcher.hidden = false; refreshCounts(); } }).observe(document.documentElement, { childList: true });
+
+  let resizeT = 0;
+  window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => drawScene(false), 150); });
+  loadSettings();
+  drawScene(false);
+  refreshCounts();
+})();
+</script>
+
+</body>
+</html>

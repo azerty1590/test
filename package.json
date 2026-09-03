@@ -7,6 +7,7 @@
     "test": "node --test tests/*.test.js",
     "icons": "node scripts/make-icons.js",
     "smoke": "node scripts/smoke.js",
-    "pack": "zip -r hide-seek-paint.zip manifest.json background.js content popup icons -x '*.DS_Store'"
+    "pack": "node scripts/build-demo.js && rm -f dist/hide-seek-paint.zip && zip -qr dist/hide-seek-paint.zip manifest.json background.js content popup icons -x \"*.DS_Store\" && ls -la dist",
+    "demo": "node scripts/build-demo.js"
   }
 }
