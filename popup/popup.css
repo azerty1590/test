@@ -1,0 +1,58 @@
+:root {
+  --bg: #12131a;
+  --panel: #1c1e29;
+  --panel-2: #252838;
+  --text: #f1f2f8;
+  --muted: #9a9fb8;
+  --accent: #7cf2a7;
+  --accent-2: #ff8bd1;
+  --danger: #ff6b6b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  width: 340px;
+  margin: 0;
+  padding: 14px;
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+header { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+.logo { font-size: 30px; line-height: 1; }
+h1 { font-size: 16px; margin: 0; }
+.tag { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mode {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 10px; border: 1px solid #2e3245; border-radius: 10px;
+  background: var(--panel); color: var(--text); cursor: pointer; text-align: left;
+  transition: transform .08s, border-color .12s, background .12s;
+}
+.mode:hover { border-color: var(--accent); background: var(--panel-2); transform: translateY(-1px); }
+.mode:disabled { opacity: .5; cursor: progress; }
+.mode .icon { font-size: 20px; }
+.mode .label { font-weight: 600; }
+.mode .hint { color: var(--muted); font-size: 11px; }
+
+.settings { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-top: 12px; }
+.settings label { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 12px; }
+.settings select {
+  background: var(--panel); color: var(--text); border: 1px solid #2e3245; border-radius: 6px; padding: 3px 6px;
+}
+
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 12px; }
+.stats div { background: var(--panel); border-radius: 8px; padding: 6px; text-align: center; }
+.stats b { display: block; font-size: 15px; color: var(--accent); }
+.stats span { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+
+.status { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: #3a1f28; color: #ffb3b3; font-size: 12px; }
+.status.ok { background: #1f3a2a; color: var(--accent); }
+
+footer { margin-top: 12px; color: var(--muted); font-size: 12px; }
+details summary { cursor: pointer; color: var(--text); }
+ol { padding-left: 18px; margin: 6px 0; }
+li { margin: 3px 0; }
+.small { font-size: 11px; }
+kbd { background: var(--panel-2); border-radius: 4px; padding: 0 4px; font-family: inherit; }

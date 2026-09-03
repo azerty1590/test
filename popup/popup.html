@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hide &amp; Seek Paint</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="logo">🦎</div>
+    <div>
+      <h1>Hide &amp; Seek Paint</h1>
+      <p class="tag">Paint yourself into this page. Then get found... or not.</p>
+    </div>
+  </header>
+
+  <section class="modes">
+    <button class="mode" data-mode="hotseat">
+      <span class="icon">🎨</span>
+      <span class="label">Hide &amp; Seek</span>
+      <span class="hint">One hides, one seeks. Pass the device.</span>
+    </button>
+    <button class="mode" data-mode="solo">
+      <span class="icon">🔍</span>
+      <span class="label">Chameleon Hunt</span>
+      <span class="hint">Solo. Find the camouflaged slabs.</span>
+    </button>
+    <button class="mode" data-mode="hide-share">
+      <span class="icon">📤</span>
+      <span class="label">Hide &amp; Share</span>
+      <span class="hint">Paint, hide, copy a code for a friend.</span>
+    </button>
+    <button class="mode" data-mode="seek-code">
+      <span class="icon">📥</span>
+      <span class="label">Seek from Code</span>
+      <span class="hint">Paste a friend's code and hunt.</span>
+    </button>
+  </section>
+
+  <section class="settings">
+    <label>Difficulty
+      <select id="difficulty">
+        <option value="easy">Easy</option>
+        <option value="normal" selected>Normal</option>
+        <option value="hard">Hard</option>
+        <option value="insane">Insane</option>
+      </select>
+    </label>
+    <label>Seek time
+      <select id="seekTime">
+        <option value="30">30 s</option>
+        <option value="45" selected>45 s</option>
+        <option value="60">60 s</option>
+        <option value="90">90 s</option>
+      </select>
+    </label>
+    <label>Guesses
+      <select id="guesses">
+        <option value="1">1</option>
+        <option value="3" selected>3</option>
+        <option value="5">5</option>
+        <option value="0">∞</option>
+      </select>
+    </label>
+    <label>Hide time
+      <select id="hideTime">
+        <option value="0">None</option>
+        <option value="60">60 s</option>
+        <option value="90" selected>90 s</option>
+        <option value="180">3 min</option>
+      </select>
+    </label>
+  </section>
+
+  <section class="stats" id="stats">
+    <div><b id="stRounds">0</b><span>rounds</span></div>
+    <div><b id="stFound">0</b><span>found</span></div>
+    <div><b id="stSolo">0</b><span>best hunt</span></div>
+    <div><b id="stCamo">0</b><span>best camo</span></div>
+  </section>
+
+  <p id="status" class="status" hidden></p>
+
+  <footer>
+    <details>
+      <summary>How to play</summary>
+      <ol>
+        <li>Open any website and pick a mode. The visible part of the page becomes the arena.</li>
+        <li><b>Hider:</b> you get a blank grey slab. Drag it somewhere and paint it to match what is behind it. Use the eyedropper to copy colours, the stamp for a few pixel-perfect patches.</li>
+        <li><b>Seeker:</b> click where you think the slab is before time or guesses run out.</li>
+        <li><b>Chameleon Hunt:</b> the extension hides several slabs with tiny imperfections. Spot them all.</li>
+      </ol>
+      <p class="small">Screenshots are taken only when you start a round and never leave your browser. Shortcut: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>.</p>
+    </details>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>

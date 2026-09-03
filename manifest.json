@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Hide & Seek Paint",
+  "version": "1.0.0",
+  "description": "Paint a slab to blend into any web page, then let a seeker hunt it down. Hot-seat, share codes and a solo chameleon hunt - on every site.",
+  "minimum_chrome_version": "116",
+  "action": {
+    "default_title": "Hide & Seek Paint",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+Shift+H" },
+      "description": "Open Hide & Seek Paint"
+    }
+  }
+}
