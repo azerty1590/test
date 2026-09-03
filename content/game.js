@@ -25,7 +25,7 @@
     .board.picker { cursor: copy; }
     .board.seek { cursor: crosshair; }
     .hud {
-      position: absolute; left: 0; right: 0; top: 0; height: ${HUD_H}px;
+      position: absolute; left: 0; right: 0; top: 0; min-height: ${HUD_H}px;
       display: flex; align-items: center; gap: 14px; padding: 0 14px;
       background: linear-gradient(180deg, rgba(14,15,22,.96), rgba(14,15,22,.88));
       border-bottom: 1px solid rgba(255,255,255,.08); backdrop-filter: blur(6px);
@@ -103,6 +103,32 @@
     .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 10px 0; }
     .kv b { color: #7cf2a7; }
     [hidden] { display: none !important; }
+    /* Phones and narrow windows: thumb-sized controls, wrapping HUD, full-width modals. */
+    @media (max-width: 700px) {
+      .hud { flex-wrap: wrap; gap: 6px 8px; padding: 6px 8px; }
+      .hud .title { font-size: 13px; }
+      .hud .title small { display: none; }
+      .hud .mid { gap: 12px; }
+      .stat { min-width: 48px; }
+      .stat b { font-size: 17px; }
+      .btn { padding: 10px 12px; min-height: 40px; }
+      .btn.small { padding: 8px 10px; font-size: 12px; min-height: 36px; }
+      .tool { width: 46px; height: 46px; font-size: 20px; }
+      .tools { bottom: max(8px, env(safe-area-inset-bottom)); gap: 6px; padding: 6px; border-radius: 12px; }
+      .field input[type=range] { width: 70px; }
+      .modal { padding: 16px; border-radius: 14px; width: min(520px, calc(100vw - 16px)); }
+      .modal h2 { font-size: 19px; }
+      .modal .big { font-size: 30px; }
+      .modal .row .btn { flex: 1 1 auto; }
+      .toast { max-width: calc(100vw - 16px); white-space: normal; text-align: center; font-size: 13px; }
+      textarea.code { height: 90px; }
+    }
+    @media (pointer: coarse) {
+      .btn { min-height: 44px; }
+      .tool { width: 48px; height: 48px; }
+      .swatch { width: 24px; height: 24px; }
+      .choice { padding: 10px 14px; }
+    }
   `;
 
   const SHAPE_LABELS = { rect: 'Slab', round: 'Blob', blob: 'Splat', ghost: 'Ghost' };
@@ -168,7 +194,12 @@
   // Tiny WebAudio synth for feedback beeps. Never throws.
   class Sfx {
     constructor(enabled) { this.enabled = enabled; this.ctx = null; }
+    haptic(kind) {
+      const pattern = { hit: [25], miss: [60, 40, 60], win: [30, 40, 30, 40, 90], lose: [180], tick: [8], shake: [40, 30, 40], hide: [20] }[kind];
+      try { if (pattern && typeof navigator.vibrate === 'function') navigator.vibrate(pattern); } catch { /* ignore */ }
+    }
     play(kind) {
+      this.haptic(kind);
       if (!this.enabled) return;
       try {
         const AC = window.AudioContext || window.webkitAudioContext;
@@ -184,11 +215,12 @@
           tick: [[1400, 0, 0.03]],
           pick: [[900, 0, 0.04]],
           hide: [[440, 0, 0.08], [554, 0.08, 0.16]],
+          shake: [[70, 0, 0.5], [55, 0.1, 0.5]],
         }[kind] || [];
         for (const [f, t, d] of notes) {
           const o = c.createOscillator();
           const g = c.createGain();
-          o.type = kind === 'miss' || kind === 'lose' ? 'sawtooth' : 'sine';
+          o.type = kind === 'miss' || kind === 'lose' || kind === 'shake' ? 'sawtooth' : 'sine';
           o.frequency.value = f;
           const at = c.currentTime + t;
           g.gain.setValueAtTime(0.0001, at);
@@ -217,6 +249,12 @@
       this.inkRatio = L.STAMP_INK[this.settings.stampInk] != null ? L.STAMP_INK[this.settings.stampInk] : Infinity;
       this.wobbleAmp = 0;
       this.previewWobble = false;
+      this.lens = null;
+      this.lensMode = false;
+      this.hold = null;
+      this.look = { dx: 0, dy: 0 };
+      this.shakeUntil = 0;
+      this.stored = null;
       this.settings.hiders = L.clamp(Number(this.settings.hiders) || 1, 1, 3);
       this.sfx = new Sfx(this.settings.sound !== false);
       this.vw = window.innerWidth;
@@ -455,10 +493,15 @@
       this.moveSlab(slab, cx - w / 2, cy - h / 2);
     }
 
+    // The HUD wraps on narrow screens, so its real height decides where play starts.
+    hudH() {
+      return Math.max(HUD_H, this.hud ? this.hud.offsetHeight : 0);
+    }
+
     moveSlab(slab, x, y) {
       const S = this.S;
       x = L.clamp(x, 0, this.vw - slab.w);
-      y = L.clamp(y, HUD_H + 2, this.vh - slab.h);
+      y = L.clamp(y, this.hudH() + 2, this.vh - slab.h);
       slab.x = Math.round(x * S) / S;
       slab.y = Math.round(y * S) / S;
     }
@@ -509,9 +552,71 @@
     // result pulse, or hidden slabs idling in 3D).
     needsAnimation() {
       if (this.fx.length || this.phase === 'result') return true;
-      if (this.phase === 'seek' && this.wobbleAmp > 0 && this.slabs.some((s) => !s.found)) return true;
+      if (this.phase === 'seek' && (this.wobbleAmp > 0 || this.lens || performance.now() < this.shakeUntil) && this.slabs.some((s) => !s.found)) return true;
       if (this.phase === 'paint' && this.previewWobble && this.active) return true;
       return false;
+    }
+
+    // Current 3D pose of a slab, or null when it is drawn flat. Combines the
+    // idle wobble, a Shake jolt and the seeker's look-around tilt.
+    slabPose(slab, now) {
+      const shaking = this.phase === 'seek' && now < this.shakeUntil && !slab.found;
+      let amp = this.slabWobble(slab);
+      if (shaking) amp = Math.max(amp, 30);
+      if (amp <= 0) return null;
+      const a = L.wobbleAngles((now / 1000) * (shaking ? 3 : 1), slab.phase, amp);
+      if (this.phase === 'seek' && this.wobbleAmp > 0 && !slab.found) {
+        const look = (this.wobbleAmp * 0.6 * Math.PI) / 180;
+        a.ry += this.look.dx * look;
+        a.rx += this.look.dy * look;
+      }
+      return a;
+    }
+
+    // Background plus every visible slab in its current pose, no overlays.
+    // Used by the magnifier lens so it shows exactly what the board shows.
+    drawScene(c, now) {
+      c.drawImage(this.bgGpu || this.bg, 0, 0, this.vw, this.vh);
+      for (const slab of this.slabs) {
+        if (slab.hiddenFromView) continue;
+        const pose = this.slabPose(slab, now);
+        if (pose) this.drawSlab3D(c, slab, pose.ry, pose.rx);
+        else c.drawImage(slab.canvas, slab.x, slab.y, slab.w, slab.h);
+      }
+    }
+
+    // Magnifier: a zoomed circle floating above the finger so it is never
+    // covered by the hand, clamped inside the viewport and below the HUD.
+    drawLens(c, now) {
+      const r = L.clamp(Math.min(this.vw, this.vh) * 0.16, 56, 96);
+      const z = 2.5;
+      const cx = L.clamp(this.lens.x, r + 4, this.vw - r - 4);
+      let cy = this.lens.y - r - 28;
+      if (cy - r < this.hudH() + 4) cy = this.lens.y + r + 28;
+      c.save();
+      c.beginPath();
+      c.arc(cx, cy, r, 0, Math.PI * 2);
+      c.clip();
+      c.translate(cx, cy);
+      c.scale(z, z);
+      c.translate(-this.lens.x, -this.lens.y);
+      this.drawScene(c, now);
+      c.restore();
+      c.save();
+      c.beginPath();
+      c.arc(cx, cy, r, 0, Math.PI * 2);
+      c.lineWidth = 3;
+      c.strokeStyle = 'rgba(255,255,255,.95)';
+      c.shadowColor = 'rgba(0,0,0,.6)';
+      c.shadowBlur = 10;
+      c.stroke();
+      c.shadowColor = 'transparent';
+      c.strokeStyle = 'rgba(124,242,167,.9)';
+      c.lineWidth = 1;
+      c.beginPath(); c.moveTo(cx - 8, cy); c.lineTo(cx + 8, cy); c.moveTo(cx, cy - 8); c.lineTo(cx, cy + 8); c.stroke();
+      c.setLineDash([3, 3]);
+      c.beginPath(); c.moveTo(this.lens.x, this.lens.y); c.lineTo(cx, cy + (cy < this.lens.y ? r : -r)); c.stroke();
+      c.restore();
     }
 
     startFx() {
@@ -595,10 +700,9 @@
           c.restore();
           continue;
         }
-        const amp = this.slabWobble(slab);
-        if (amp > 0) {
-          const a = L.wobbleAngles(now / 1000, slab.phase, amp);
-          this.drawSlab3D(c, slab, a.ry, a.rx);
+        const pose = this.slabPose(slab, now);
+        if (pose) {
+          this.drawSlab3D(c, slab, pose.ry, pose.rx);
         } else {
           c.drawImage(slab.canvas, slab.x, slab.y, slab.w, slab.h);
         }
@@ -649,6 +753,7 @@
         }
         c.restore();
       }
+      if (this.phase === 'seek' && this.lens) this.drawLens(c, now);
       if (this.phase === 'paint' && this.brushPos && this.tool !== 'move' && this.tool !== 'fill') {
         c.save();
         c.beginPath();
@@ -787,6 +892,7 @@
       switch (this.mode) {
         case 'solo': return this.soloBrief();
         case 'seek-code': return this.codeEntry();
+        case 'seek-page': return this.pageSeekEntry();
         case 'hide-share':
         default: return this.hiderBrief();
       }
@@ -940,17 +1046,23 @@
       this.seekStart = performance.now();
       this.board.className = 'board seek';
       this.wobbleAmp = this.levelWobble != null ? this.levelWobble : (L.WOBBLE[this.settings.wobble] != null ? L.WOBBLE[this.settings.wobble] : L.WOBBLE.normal);
+      this.lens = null;
+      this.shakeUntil = 0;
+      this.look = { dx: 0, dy: 0 };
+      this.startLookAround();
       this.startFx();
       const total = this.slabs.length;
       this.setHud({
         title: '🔍 Seeker',
-        sub: total > 1 ? `find all ${total} slabs` : 'click where the slab is hiding',
+        sub: total > 1 ? `find all ${total} slabs · hold to magnify` : 'tap the slab · hold to magnify',
         stats: [
           { key: 'time', label: 'time', value: L.formatTime(this.settings.seekTime * 1000) },
           { key: 'guesses', label: 'guesses', value: this.settings.guesses ? this.settings.guesses : '∞' },
           ...(total > 1 ? [{ key: 'found', label: 'found', value: `0/${total}` }] : []),
         ],
         buttons: [
+          ['🔍 Lens', (e) => this.toggleLens(e.currentTarget), 'small'],
+          ['👋 Shake (−5s)', () => this.shake(), 'small'],
           ['Hint (−10s)', () => this.useHint(), 'small'],
           ['Give up', () => this.endSeek(false), 'danger small'],
           ['Quit', () => this.confirmQuit(), 'ghost small'],
@@ -963,6 +1075,44 @@
         this.showToast('Free hint: a slab is hiding on a flat part of the page', 2600);
       }
       this.render();
+    }
+
+    // ---------- seeker aids ----------
+    toggleLens(btn) {
+      this.lensMode = !this.lensMode;
+      if (btn) btn.classList.toggle('primary', this.lensMode);
+      if (!this.lensMode) { this.lens = null; this.render(); }
+      else this.showToast('Move over the page to magnify it. Tap to guess.', 1800);
+    }
+
+    // Everything hidden jolts for a moment: a real object cannot help but move.
+    shake() {
+      if (this.phase !== 'seek') return;
+      this.shakeUntil = performance.now() + 1500;
+      this.adjustTimer(-5000);
+      this.sfx.play('shake');
+      this.showToast('Everything jolts!', 1200);
+      this.startFx();
+    }
+
+    // Look-around: the mouse position on desktop, the gyroscope on a phone,
+    // tilts every hidden slab a little so its edges and shadow shift.
+    startLookAround() {
+      this.stopLookAround();
+      this.onOrient = (e) => {
+        if (e.gamma == null || e.beta == null) return;
+        this.look = { dx: L.clamp(e.gamma / 25, -1, 1), dy: L.clamp((e.beta - 40) / 25, -1, 1) };
+      };
+      try { window.addEventListener('deviceorientation', this.onOrient); } catch { /* ignore */ }
+    }
+
+    stopLookAround() {
+      if (this.onOrient) window.removeEventListener('deviceorientation', this.onOrient);
+      this.onOrient = null;
+    }
+
+    lookAt(p) {
+      this.look = { dx: L.clamp((p.x / this.vw - 0.5) * 2, -1, 1), dy: L.clamp((p.y / this.vh - 0.5) * 2, -1, 1) };
     }
 
     placeHint(target) {
@@ -1014,6 +1164,10 @@
       if (this.phase !== 'seek') return;
       const msLeft = this.timeLeft();
       this.stopTimer();
+      this.stopLookAround();
+      this.lens = null;
+      this.lensMode = false;
+      this.hold = null;
       this.phase = 'result';
       this.hintCircle = null;
       this.board.className = 'board';
@@ -1038,6 +1192,15 @@
         buttons.push(['New snapshot', async () => { this.hideModal(); await this.recapture(); this.round++; this.hiderBrief(1); }]);
       } else if (this.mode === 'seek-code') {
         buttons.push(['Try another code', () => this.codeEntry(), 'primary']);
+      } else if (this.mode === 'seek-page') {
+        const foundIds = this.slabs.filter((s) => s.found && s.id != null).map((s) => s.id);
+        if (foundIds.length) {
+          buttons.push([`Remove the ${foundIds.length} found from this page`, async () => {
+            await safeSend({ type: 'HSP_REMOVE_HIDES', url: location.href, ids: foundIds });
+            this.pageSeekEntry();
+          }, 'primary']);
+        }
+        buttons.push(['Seek again', () => this.pageSeekEntry(), foundIds.length ? '' : 'primary']);
       } else {
         buttons.push(['Play again', () => this.hiderBrief(1), 'primary']);
       }
@@ -1069,6 +1232,10 @@
       };
       const code = L.encodeShareCode(level);
       safeSend({ type: 'HSP_RECORD_STATS', stats: { camo: this.hiderScore } });
+      const kept = el('p', { class: 'muted', text: 'Keeping this slab hidden on this page…' });
+      this.storeHides(level).then((count) => {
+        kept.textContent = count ? `This slab now waits on this page: ${count} hider${count === 1 ? '' : 's'} here. The toolbar badge shows the count.` : 'Could not keep the slab on this page (storage unavailable).';
+      });
       const ta = el('textarea', { class: 'code', readonly: 'readonly' });
       ta.value = code;
       const copy = async () => {
@@ -1088,6 +1255,7 @@
           el('p', { html: `Camouflage <b>${this.hiderScore}%</b>. Your friend opens <b>${location.host}</b> at the same page, picks <i>Seek from Code</i> and pastes this (${Math.round(code.length / 1024)} KB):` }),
           ta,
           el('p', { class: 'muted', text: 'The code contains only the painted slab and its position, not the page.' }),
+          kept,
         ]),
         buttons: [
           ['Copy code', copy, 'primary'],
@@ -1096,6 +1264,62 @@
         ],
       });
       copy();
+    }
+
+    // Registers a level's slabs as hiders on this page (ids derive from the
+    // level timestamp so pasting the same code twice does not duplicate).
+    async storeHides(level) {
+      let count = 0;
+      for (let i = 0; i < level.slabs.length; i++) {
+        const s = level.slabs[i];
+        const res = await safeSend({
+          type: 'HSP_STORE_HIDE',
+          entry: {
+            url: location.href, vw: level.vw, vh: level.vh, wobble: level.wobble,
+            slab: { id: `${level.t || Date.now()}-${i}`, x: s.x, y: s.y, w: s.w, h: s.h, shape: s.shape, camo: s.camo, img: s.img },
+          },
+        });
+        if (res && res.ok) count = res.count;
+      }
+      return count;
+    }
+
+    async pageSeekEntry() {
+      this.phase = 'page';
+      this.slabs = [];
+      this.markers = [];
+      this.hintCircle = null;
+      this.levelWobble = null;
+      this.render();
+      this.setHud({ title: '🙈 Seek on this page', sub: 'loading hiders' });
+      const res = await safeSend({ type: 'HSP_GET_PAGE', url: location.href });
+      const page = res && res.ok ? res.page : { slabs: [] };
+      if (!page.slabs.length) {
+        this.showModal({
+          opaque: true,
+          title: 'Nobody is hiding here yet',
+          body: '<p>Slabs you share or codes you paste stay hidden on their page. Be the first: paint a slab and hide it here.</p>',
+          buttons: [['Hide one now', () => { this.mode = 'hide-share'; this.hiderBrief(1); }, 'primary'], ['Quit', () => this.destroy(), 'ghost']],
+        });
+        return;
+      }
+      const n = page.slabs.length;
+      const level = { v: 1, url: page.url || location.href, vw: this.vw, vh: this.vh, slabs: page.slabs };
+      this.settings.seekTime = Math.round(this.settings.seekTime * (1 + 0.4 * (n - 1)));
+      try {
+        await this.loadLevel(level, { silent: true });
+      } catch (e) {
+        this.showModal({ title: 'Could not load the hiders', body: `<p>${e.message}</p>`, buttons: [['Quit', () => this.destroy(), 'ghost']] });
+        return;
+      }
+      const best = Math.max(...this.slabs.map((s) => s.camo || 0));
+      this.hiderScore = null;
+      this.showModal({
+        opaque: true,
+        title: `${n} hider${n === 1 ? '' : 's'} on this page`,
+        body: `<p>Every slab shared or pasted on this page is waiting. Best camouflage among them: <b>${best}%</b>. You get <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || 'unlimited'}</b> guesses to find them all.</p><p class="muted">Hold to magnify · move the mouse or tilt the phone to look around · Shake jolts everything.</p>`,
+        buttons: [['Go!', () => this.startSeek(), 'primary'], ['Quit', () => this.destroy(), 'ghost']],
+      });
     }
 
     codeEntry() {
@@ -1120,10 +1344,11 @@
       setTimeout(() => ta.focus(), 50);
     }
 
-    async loadLevel(level) {
+    async loadLevel(level, opts) {
+      opts = opts || {};
       const slabs = [];
       for (const s of level.slabs) {
-        const p = L.rescalePlacement(s, level.vw || this.vw, level.vh || this.vh, this.vw, this.vh);
+        const p = L.rescalePlacement(s, s.vw || level.vw || this.vw, s.vh || level.vh || this.vh, this.vw, this.vh);
         const slab = this.makeSlab(p.x, p.y, p.w, p.h, L.SHAPES.includes(s.shape) ? s.shape : 'rect');
         let img;
         try {
@@ -1141,7 +1366,8 @@
         c.restore();
         if (img.close) img.close();
         this.moveSlab(slab, p.x, p.y);
-        slab.hider = 1;
+        slab.hider = slabs.length + 1;
+        slab.id = s.id != null ? s.id : null;
         slab.camo = s.camo != null ? s.camo : level.camo;
         slab.busy = this.slabBusyness(slab);
         slab.flat = slab.busy < L.FLAT_THRESHOLD;
@@ -1152,6 +1378,9 @@
       if (level.seekTime) this.settings.seekTime = level.seekTime;
       if (level.guesses != null) this.settings.guesses = level.guesses;
       this.levelWobble = L.WOBBLE[level.wobble] != null ? L.WOBBLE[level.wobble] : null;
+      if (opts.silent) return;
+      // A pasted code joins the hiders on this page so it can be hunted again later.
+      const kept = this.mode === 'seek-code' ? await this.storeHides(level) : 0;
       let warn = '';
       try {
         const u = new URL(level.url);
@@ -1163,7 +1392,7 @@
       this.showModal({
         opaque: true,
         title: 'Ready to seek',
-        body: `<p>${slabs.length} slab hidden with <b>${this.hiderScore != null ? this.hiderScore + '%' : '?'}</b> camouflage. You get <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || 'unlimited'}</b> guesses.</p>${warn}`,
+        body: `<p>${slabs.length} slab hidden with <b>${this.hiderScore != null ? this.hiderScore + '%' : '?'}</b> camouflage. You get <b>${this.settings.seekTime}s</b> and <b>${this.settings.guesses || 'unlimited'}</b> guesses.</p>${kept ? `<p class="muted">Kept on this page: ${kept} hider${kept === 1 ? '' : 's'} here now.</p>` : ''}${warn}`,
         buttons: [['Go!', () => this.startSeek(), 'primary'], ['Back', () => this.codeEntry(), 'ghost']],
       });
     }
@@ -1196,7 +1425,7 @@
       // Steer chameleons onto thumbnails, images and text rather than the empty
       // margins that dominate flat sites like Wikipedia or Reddit.
       const rate = (c) => this.regionBusyness(c.x, c.y, c.w, c.h);
-      const plan = L.planPlacements(count, this.vw, this.vh, { random: rnd, scale: diff.slabScale, topMargin: HUD_H + 6, rate });
+      const plan = L.planPlacements(count, this.vw, this.vh, { random: rnd, scale: diff.slabScale, topMargin: this.hudH() + 6, rate });
       this.slabs = plan.map((p) => { const slab = this.generateChameleon(p, diff, rnd); slab.busy = p.busy; return slab; });
       this.markers = [];
       this.hintCircle = null;
@@ -1208,16 +1437,25 @@
       this.seekStart = performance.now();
       this.board.className = 'board seek';
       this.wobbleAmp = diff.wobble;
+      this.lens = null;
+      this.shakeUntil = 0;
+      this.look = { dx: 0, dy: 0 };
+      this.startLookAround();
       this.startFx();
       this.setHud({
         title: '🦎 Chameleon Hunt',
-        sub: `round ${this.round} · ${this.settings.difficulty}`,
+        sub: `round ${this.round} · ${this.settings.difficulty} · hold to magnify`,
         stats: [
           { key: 'time', label: 'time', value: L.formatTime(time * 1000) },
           { key: 'found', label: 'found', value: `0/${count}` },
           { key: 'score', label: 'score', value: this.soloScore },
         ],
-        buttons: [['Give up', () => this.endSolo(false), 'danger small'], ['Quit', () => this.confirmQuit(), 'ghost small']],
+        buttons: [
+          ['🔍 Lens', (e) => this.toggleLens(e.currentTarget), 'small'],
+          ['👋 Shake (−5s)', () => this.shake(), 'small'],
+          ['Give up', () => this.endSolo(false), 'danger small'],
+          ['Quit', () => this.confirmQuit(), 'ghost small'],
+        ],
       });
       this.startTimer(time, () => this.endSolo(false));
       this.render();
@@ -1298,6 +1536,10 @@
       if (this.phase !== 'seek') return;
       const msLeft = this.timeLeft();
       this.stopTimer();
+      this.stopLookAround();
+      this.lens = null;
+      this.lensMode = false;
+      this.hold = null;
       this.phase = 'result';
       this.board.className = 'board';
       this.render();
@@ -1526,8 +1768,20 @@
       const p = this.pointerPos(e);
       if (e.button === 2) return;
       if (this.phase === 'seek') {
-        if (p.y < HUD_H) return;
-        if (this.soloMode) this.soloClick(p.x, p.y); else this.seekClick(p.x, p.y);
+        if (p.y < this.hudH()) return;
+        // Quick tap = guess. Hold still = magnifier lens (released without guessing).
+        try { this.board.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+        clearTimeout(this.hold && this.hold.timer);
+        const hold = { x: p.x, y: p.y, id: e.pointerId, moved: false, fired: false, timer: 0 };
+        hold.timer = setTimeout(() => {
+          if (this.hold !== hold || hold.moved || this.phase !== 'seek') return;
+          hold.fired = true;
+          this.lens = { x: hold.x, y: hold.y };
+          this.sfx.haptic('tick');
+          this.startFx();
+          this.render();
+        }, 280);
+        this.hold = hold;
         return;
       }
       if (this.phase !== 'paint' || !this.active) return;
@@ -1552,6 +1806,20 @@
 
     onPointerMove(e) {
       const p = this.pointerPos(e);
+      if (this.phase === 'seek') {
+        if (e.pointerType !== 'touch' || this.hold) this.lookAt(p);
+        if (this.hold) {
+          if (!this.hold.fired && Math.hypot(p.x - this.hold.x, p.y - this.hold.y) > 8) {
+            this.hold.moved = true;
+            clearTimeout(this.hold.timer);
+          }
+          if (this.hold.fired) this.lens = p;
+        } else if (this.lensMode && e.pointerType !== 'touch') {
+          this.lens = p.y >= this.hudH() ? p : null;
+        }
+        if (!this.fxRaf) this.render();
+        return;
+      }
       if (this.phase === 'paint') {
         this.brushPos = p;
         if (this.drag) {
@@ -1576,6 +1844,20 @@
     }
 
     onPointerUp(e) {
+      if (this.phase === 'seek' && this.hold && this.hold.id === e.pointerId) {
+        const hold = this.hold;
+        this.hold = null;
+        clearTimeout(hold.timer);
+        try { this.board.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+        if (hold.fired) {
+          if (!this.lensMode || e.pointerType === 'touch') this.lens = null;
+          this.render();
+          return;
+        }
+        if (hold.moved || e.type === 'pointercancel') { this.render(); return; }
+        if (this.soloMode) this.soloClick(hold.x, hold.y); else this.seekClick(hold.x, hold.y);
+        return;
+      }
       if (this.drag || this.stroke) {
         this.drag = null;
         this.stroke = null;
@@ -1595,6 +1877,8 @@
       clearTimeout(this.resizeT);
       if (this.fxRaf) cancelAnimationFrame(this.fxRaf);
       this.fxRaf = 0;
+      this.stopLookAround();
+      if (this.hold) clearTimeout(this.hold.timer);
       this.host.remove();
       if (current === this) current = null;
     }

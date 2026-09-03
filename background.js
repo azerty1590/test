@@ -1,7 +1,85 @@
-// Background service worker: injects the game into the active tab and
-// takes viewport screenshots on request. Screenshots never leave the browser.
+// Background service worker: injects the game into the active tab, takes
+// viewport screenshots on request, keeps the per-page registry of hidden
+// slabs and shows their count on the toolbar badge. Nothing leaves the browser.
+
+importScripts('content/lib.js');
 
 const GAME_FILES = ['content/lib.js', 'content/game.js'];
+const MAX_SLABS_PER_PAGE = 12;
+const MAX_PAGES = 40;
+
+// ---- "hiders on this page" registry ----
+async function getPages() {
+  const { pages = {} } = await chrome.storage.local.get('pages');
+  return pages;
+}
+
+async function getPage(url) {
+  const pages = await getPages();
+  return pages[HSP.pageKey(url)] || { url, slabs: [] };
+}
+
+async function storeHide(entry) {
+  const okImg = entry && entry.slab && typeof entry.slab.img === 'string' && /^data:image\/(png|webp|jpeg);base64,[A-Za-z0-9+/=]+$/.test(entry.slab.img);
+  if (!entry || !entry.url || !okImg || !/^https?:/i.test(entry.url)) throw new Error('Bad hide entry');
+  const key = HSP.pageKey(entry.url);
+  const pages = await getPages();
+  const page = pages[key] || { url: entry.url, slabs: [] };
+  const id = String(entry.slab.id || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`);
+  if (!page.slabs.some((s) => s.id === id)) {
+    page.slabs.push({
+      id,
+      x: entry.slab.x, y: entry.slab.y, w: entry.slab.w, h: entry.slab.h,
+      shape: entry.slab.shape, camo: entry.slab.camo, img: entry.slab.img,
+      vw: entry.vw, vh: entry.vh, wobble: entry.wobble, t: Date.now(),
+    });
+    page.slabs = page.slabs.slice(-MAX_SLABS_PER_PAGE);
+  }
+  page.url = entry.url;
+  page.t = Date.now();
+  pages[key] = page;
+  const keys = Object.keys(pages);
+  if (keys.length > MAX_PAGES) {
+    keys.sort((a, b) => (pages[a].t || 0) - (pages[b].t || 0));
+    for (const k of keys.slice(0, keys.length - MAX_PAGES)) delete pages[k];
+  }
+  await chrome.storage.local.set({ pages });
+  return { id, count: page.slabs.length };
+}
+
+async function removeHides(url, ids) {
+  const key = HSP.pageKey(url);
+  const pages = await getPages();
+  const page = pages[key];
+  if (!page) return { count: 0 };
+  const drop = new Set((ids || []).map(String));
+  page.slabs = page.slabs.filter((s) => !drop.has(String(s.id)));
+  if (page.slabs.length) pages[key] = page; else delete pages[key];
+  await chrome.storage.local.set({ pages });
+  return { count: page.slabs.length };
+}
+
+// ---- toolbar badge ----
+async function refreshBadge(tabId, url) {
+  if (tabId == null) return;
+  let count = 0;
+  if (url && /^https?:/i.test(url)) count = (await getPage(url)).slabs.length;
+  try {
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: '#7cf2a7' });
+    if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ tabId, color: '#0c1a12' });
+    await chrome.action.setBadgeText({ tabId, text: count ? String(count) : '' });
+  } catch { /* tab may be gone */ }
+}
+
+// With the optional "tabs" permission granted these carry the URL, so the
+// badge follows the user from page to page. Without it, tab.url is undefined
+// and the badge is only refreshed when the popup opens or a game runs.
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs.get(tabId).then((tab) => { if (tab && tab.url) refreshBadge(tabId, tab.url); }).catch(() => {});
+});
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if ((info.status === 'complete' || info.url) && tab && tab.url) refreshBadge(tabId, tab.url);
+});
 
 function captureTab(windowId) {
   return new Promise((resolve, reject) => {
@@ -64,6 +142,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const windowId = sender.tab ? sender.tab.windowId : undefined;
     captureTab(windowId)
       .then((screenshot) => sendResponse({ ok: true, screenshot }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  if (msg.type === 'HSP_STORE_HIDE') {
+    storeHide(msg.entry)
+      .then(async (r) => { if (sender.tab) await refreshBadge(sender.tab.id, msg.entry.url); sendResponse({ ok: true, ...r }); })
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  if (msg.type === 'HSP_GET_PAGE') {
+    getPage(msg.url)
+      .then((page) => sendResponse({ ok: true, page }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  if (msg.type === 'HSP_REMOVE_HIDES') {
+    removeHides(msg.url, msg.ids)
+      .then(async (r) => { if (sender.tab) await refreshBadge(sender.tab.id, msg.url); sendResponse({ ok: true, ...r }); })
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  if (msg.type === 'HSP_BADGE') {
+    refreshBadge(msg.tabId, msg.url)
+      .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }

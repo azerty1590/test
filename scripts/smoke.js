@@ -42,6 +42,31 @@ const STRICT_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>Sla
 const STRICT_CSS = `body{margin:0;font-family:sans-serif;color:#202122;background:#fff;display:flex}.side{width:180px;background:#f8f9fa;border-right:1px solid #a2a9b1;padding:20px;font-size:13px;min-height:100vh}.side ul{list-style:none;padding:0;margin:0}.side li{padding:4px 0;color:#0645ad}.main{flex:1;padding:16px 40px;max-width:900px}h1{font-family:serif;font-weight:normal;border-bottom:1px solid #a2a9b1;font-size:28px;margin:0}.sub{color:#54595d;font-size:12px}.infobox{float:right;border:1px solid #a2a9b1;background:#f8f9fa;padding:6px;margin:0 0 12px 16px;width:236px;font-size:12px}.cap{padding:4px 2px}table{width:100%}th{text-align:left;padding:2px 4px}p{line-height:1.6;font-size:14px}h2{font-family:serif;font-weight:normal;border-bottom:1px solid #a2a9b1;font-size:22px}`;
 const PHOTO = `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="150"><rect width="220" height="150" fill="#c9b79c"/><rect y="40" width="220" height="18" fill="#a8927a"/><rect y="90" width="220" height="12" fill="#8c7760"/><circle cx="60" cy="120" r="14" fill="#6d5c48"/><circle cx="170" cy="30" r="10" fill="#e3d6c1"/></svg>`;
 
+// Fake chrome.runtime for the page side: screenshots via Playwright, and an
+// in-memory "hiders on this page" registry mirroring background.js.
+const RUNTIME_STUB = `
+  window.__pages = window.__pages || {};
+  window.__sent = [];
+  const key = (u) => { const x = new URL(u); return x.origin + x.pathname + x.search; };
+  window.chrome = window.chrome || {};
+  window.chrome.runtime = {
+    onMessage: { addListener(fn) { window.__hspListener = fn; } },
+    sendMessage: async (m) => {
+      window.__sent.push(m);
+      if (!m) return { ok: true };
+      if (m.type === 'HSP_CAPTURE') return { ok: true, screenshot: await window.__pwCapture() };
+      if (m.type === 'HSP_STORE_HIDE') {
+        const k = key(m.entry.url); const p = window.__pages[k] || (window.__pages[k] = { url: m.entry.url, slabs: [] });
+        if (!p.slabs.some((s) => s.id === m.entry.slab.id)) p.slabs.push({ ...m.entry.slab, vw: m.entry.vw, vh: m.entry.vh, wobble: m.entry.wobble });
+        return { ok: true, id: m.entry.slab.id, count: p.slabs.length };
+      }
+      if (m.type === 'HSP_GET_PAGE') return { ok: true, page: window.__pages[key(m.url)] || { url: m.url, slabs: [] } };
+      if (m.type === 'HSP_REMOVE_HIDES') { const p = window.__pages[key(m.url)]; if (p) p.slabs = p.slabs.filter((s) => !m.ids.includes(s.id)); return { ok: true, count: p ? p.slabs.length : 0 }; }
+      return { ok: true };
+    },
+  };
+`;
+
 async function main() {
   const server = http.createServer((req, res) => {
     if (req.url.startsWith('/strict.css')) { res.setHeader('content-type', 'text/css'); return res.end(STRICT_CSS); }
@@ -81,12 +106,32 @@ async function main() {
     assert.equal(r, true);
     const stats = await sw.evaluate(async () => { await recordStats({ rounds: 1, found: 2, camo: 77, soloScore: 300 }); return (await chrome.storage.local.get('stats')).stats; });
     assert.equal(stats.roundsPlayed, 1); assert.equal(stats.slabsFound, 2); assert.equal(stats.bestCamo, 77); assert.equal(stats.soloBestScore, 300);
+    // Page registry + badge live in the worker.
+    const reg = await sw.evaluate(async () => {
+      const img = 'data:image/png;base64,iVBORw0KGgo=';
+      const a = await storeHide({ url: 'https://example.com/a?x=1#h', vw: 1000, vh: 800, wobble: 'normal', slab: { id: 'one', x: 1, y: 2, w: 30, h: 30, shape: 'rect', camo: 50, img } });
+      const dup = await storeHide({ url: 'https://example.com/a?x=1', vw: 1000, vh: 800, slab: { id: 'one', x: 1, y: 2, w: 30, h: 30, shape: 'rect', camo: 50, img } });
+      const b = await storeHide({ url: 'https://example.com/a?x=1', vw: 1000, vh: 800, slab: { x: 5, y: 5, w: 30, h: 30, shape: 'round', camo: 10, img } });
+      const other = await getPage('https://example.com/b');
+      const [tab] = await chrome.tabs.query({});
+      await refreshBadge(tab.id, 'https://example.com/a?x=1');
+      const badge = await chrome.action.getBadgeText({ tabId: tab.id });
+      const removed = await removeHides('https://example.com/a?x=1', ['one']);
+      await refreshBadge(tab.id, 'https://example.com/a?x=1');
+      const badge2 = await chrome.action.getBadgeText({ tabId: tab.id });
+      let bad = null; try { await storeHide({ url: 'https://x', slab: { img: 'javascript:1' } }); } catch (e) { bad = e.message; }
+      return { a: a.count, dup: dup.count, b: b.count, other: other.slabs.length, badge, removed: removed.count, badge2, bad };
+    });
+    assert.deepEqual(reg, { a: 1, dup: 1, b: 2, other: 0, badge: '2', removed: 1, badge2: '1', bad: 'Bad hide entry' });
   });
 
   const popup = await context.newPage();
   await step('popup renders modes, settings and stats', async () => {
     await popup.goto(`chrome-extension://${extId}/popup/popup.html`);
-    assert.equal(await popup.locator('.mode').count(), 4);
+    assert.equal(await popup.locator('.mode').count(), 5);
+    await popup.waitForFunction(() => document.querySelector('#pageCount').textContent !== '…');
+    assert.equal(await popup.locator('#pageCount').textContent(), '–', 'the popup tab itself is not a playable page');
+    assert.equal(await popup.locator('#seekPage').isDisabled(), true);
     await popup.waitForFunction(() => document.querySelector('#stRounds').textContent === '1');
     assert.equal(await popup.locator('#stCamo').textContent(), '77%');
     await popup.selectOption('#difficulty', 'hard');
@@ -113,13 +158,7 @@ async function main() {
   const page = await context.newPage();
   await page.goto(url);
   await page.exposeFunction('__pwCapture', async () => 'data:image/png;base64,' + (await page.screenshot({ type: 'png' })).toString('base64'));
-  await page.evaluate(() => {
-    window.chrome = window.chrome || {};
-    window.chrome.runtime = {
-      onMessage: { addListener(fn) { window.__hspListener = fn; } },
-      sendMessage: (m) => (m && m.type === 'HSP_CAPTURE') ? window.__pwCapture().then((screenshot) => ({ ok: true, screenshot })) : Promise.resolve({ ok: true }),
-    };
-  });
+  await page.evaluate(RUNTIME_STUB);
   await page.addScriptTag({ path: path.join(ROOT, 'content/lib.js') });
   await page.addScriptTag({ path: path.join(ROOT, 'content/game.js') });
 
@@ -383,6 +422,70 @@ async function main() {
     assert.match(await sh().locator('.modal').textContent(), /Found!/);
   });
 
+  await step('hiders on this page: shared and pasted slabs are kept, seek-page hunts them, found ones can be removed', async () => {
+    const pages = await g(() => JSON.parse(JSON.stringify(window.__pages)));
+    const keys = Object.keys(pages);
+    assert.equal(keys.length, 1, 'one page in the registry');
+    assert.equal(pages[keys[0]].slabs.length, 1, 'share + paste of the same code stored once');
+    assert.ok(await g(() => window.__sent.some((m) => m.type === 'HSP_STORE_HIDE')));
+    await start('seek-page', { seekTime: 30, guesses: 3, hideTime: 0, sound: false });
+    await page.waitForFunction(() => /1 hider on this page/.test(document.querySelector('#hsp-host').shadowRoot.querySelector('.modal').textContent));
+    await clickBtn('Go!');
+    await page.waitForFunction(() => window.__HSP__.game.phase === 'seek');
+    const s = await g(() => { const s = window.__HSP__.game.slabs[0]; return { x: s.x, y: s.y, w: s.w, h: s.h, id: s.id }; });
+    assert.ok(s.id, 'slab carries its registry id');
+    await page.mouse.click(s.x + s.w / 2, s.y + s.h / 2);
+    await page.waitForFunction(() => window.__HSP__.game.phase === 'result');
+    await clickBtn('Remove the 1 found');
+    await page.waitForFunction(() => /Nobody is hiding here yet/.test(document.querySelector('#hsp-host').shadowRoot.querySelector('.modal').textContent));
+    assert.equal(await g(() => Object.keys(window.__pages).every((k) => window.__pages[k].slabs.length === 0)), true);
+    await clickBtn('Hide one now');
+    assert.match(await sh().locator('.modal').textContent(), /Hide & Share/);
+  });
+
+  await step('phone viewport: wrapping HUD, thumb controls, long-press lens, shake, look-around, tap to find', async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(200);
+    await start('solo', { difficulty: 'easy', sound: false });
+    assert.equal(await g(() => window.__HSP__.game.vw), 390);
+    await clickBtn('Start round');
+    const hud = await sh().locator('.hud').boundingBox();
+    assert.ok(hud.width <= 390 && hud.height >= 60, `HUD fits the phone (${hud.width}x${hud.height})`);
+    const hudH = await g(() => window.__HSP__.game.hudH());
+    assert.ok(hudH >= hud.height - 1, 'game uses the real HUD height');
+    for (const b of await sh().locator('.hud .btn').all()) {
+      const box = await b.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= 390 && box.height >= 36, 'HUD buttons are on-screen and thumb-sized');
+    }
+    const slabs = await g(() => window.__HSP__.game.slabs.map((s) => ({ x: s.x, y: s.y, w: s.w, h: s.h })));
+    assert.equal(slabs.length, 3);
+    for (const s of slabs) assert.ok(s.y >= hudH && s.x + s.w <= 390 && s.y + s.h <= 844, 'slabs fit the phone below the HUD');
+    // Long-press on an empty spot opens the lens and does not count as a guess.
+    const empty = await g((slabs) => { for (let y = 200; y < 830; y += 6) for (let x = 6; x < 384; x += 6) { if (!slabs.some((s) => x >= s.x - 6 && x <= s.x + s.w + 6 && y >= s.y - 6 && y <= s.y + s.h + 6)) return { x, y }; } return null; }, slabs);
+    await page.mouse.move(empty.x, empty.y);
+    await page.mouse.down();
+    await page.waitForTimeout(450);
+    assert.ok(await g(() => Boolean(window.__HSP__.game.lens)), 'lens appears on hold');
+    await page.mouse.move(empty.x + 20, empty.y + 10, { steps: 4 });
+    await page.mouse.up();
+    assert.equal(await g(() => window.__HSP__.game.guessesUsed), 0, 'a hold is not a guess');
+    assert.equal(await g(() => window.__HSP__.game.lens), null, 'lens hides on release');
+    await page.mouse.move(385, 820);
+    const look = await g(() => window.__HSP__.game.look);
+    assert.ok(look.dx > 0.9 && look.dy > 0.9, 'look-around follows the pointer');
+    const before = await g(() => window.__HSP__.game.timeLeft());
+    await clickBtn('Shake');
+    const after = await g(() => ({ left: window.__HSP__.game.timeLeft(), shaking: window.__HSP__.game.shakeUntil > performance.now() }));
+    assert.ok(after.shaking && after.left < before - 4500, 'shake jolts and costs 5s');
+    await shot('phone-seek.png');
+    for (const s of slabs) await page.mouse.click(s.x + s.w / 2, s.y + s.h / 2);
+    await page.waitForFunction(() => window.__HSP__.game.phase === 'result');
+    assert.match(await sh().locator('.modal').textContent(), /All found/);
+    await shot('phone-result.png');
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.waitForTimeout(200);
+  });
+
   await step('strict-CSP flat page: overlay renders, chameleons avoid empty margins, painting works', async () => {
     const strict = await context.newPage();
     const cspViolations = [];
@@ -394,13 +497,7 @@ async function main() {
     assert.ok(cspViolations.length > 0, 'the test page enforces its CSP');
     cspViolations.length = 0;
     await strict.exposeFunction('__pwCapture', async () => 'data:image/png;base64,' + (await strict.screenshot({ type: 'png' })).toString('base64'));
-    await strict.evaluate(() => {
-      window.chrome = window.chrome || {};
-      window.chrome.runtime = {
-        onMessage: { addListener(fn) { window.__hspListener = fn; } },
-        sendMessage: (m) => (m && m.type === 'HSP_CAPTURE') ? window.__pwCapture().then((screenshot) => ({ ok: true, screenshot })) : Promise.resolve({ ok: true }),
-      };
-    });
+    await strict.evaluate(RUNTIME_STUB);
     // <script> tags are blocked by script-src 'none'; content scripts are not, so mimic them with evaluate().
     await strict.evaluate(fs.readFileSync(path.join(ROOT, 'content/lib.js'), 'utf8'));
     await strict.evaluate(fs.readFileSync(path.join(ROOT, 'content/game.js'), 'utf8'));

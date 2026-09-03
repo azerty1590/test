@@ -24,6 +24,55 @@ function readSettings() {
   };
 }
 
+let activeTab = null;
+
+async function loadPage() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    activeTab = tab || null;
+    const url = tab && tab.url;
+    const countEl = $('#pageCount');
+    const label = $('#pageLabel');
+    const btn = $('#seekPage');
+    if (!url || !/^https?:/i.test(url)) {
+      countEl.textContent = '–';
+      label.textContent = 'not a playable page';
+      btn.disabled = true;
+      return;
+    }
+    const res = await chrome.runtime.sendMessage({ type: 'HSP_GET_PAGE', url });
+    const n = res && res.ok ? res.page.slabs.length : 0;
+    countEl.textContent = String(n);
+    label.textContent = n === 1 ? 'hider on this page' : 'hiders on this page';
+    btn.disabled = n === 0;
+    chrome.runtime.sendMessage({ type: 'HSP_BADGE', tabId: tab.id, url }).catch(() => {});
+  } catch {
+    $('#pageCount').textContent = '–';
+  }
+}
+
+async function loadBadgeToggle() {
+  const box = $('#badgeAll');
+  try {
+    box.checked = await chrome.permissions.contains({ permissions: ['tabs'] });
+  } catch {
+    box.disabled = true;
+  }
+  box.addEventListener('change', async () => {
+    try {
+      if (box.checked) {
+        box.checked = await chrome.permissions.request({ permissions: ['tabs'] });
+        if (box.checked) showStatus('The icon now counts hiders on every page you visit.', true);
+      } else {
+        await chrome.permissions.remove({ permissions: ['tabs'] });
+      }
+    } catch (e) {
+      box.checked = false;
+      showStatus(`Could not change the permission: ${e.message}`);
+    }
+  });
+}
+
 async function loadState() {
   const { settings, stats } = await chrome.storage.local.get(['settings', 'stats']);
   if (settings) {
@@ -64,3 +113,5 @@ for (const btn of buttons) {
 }
 
 loadState();
+loadPage();
+loadBadgeToggle();

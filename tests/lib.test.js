@@ -159,3 +159,10 @@ test('wobbleAngles stays within its amplitude, varies over time and is zero when
   assert.equal(L.WOBBLE.still, 0);
   for (const d of Object.values(L.DIFFICULTY)) assert.ok(d.wobble > 0);
 });
+
+test('pageKey ignores the hash but keeps origin, path and query', () => {
+  assert.equal(L.pageKey('https://www.youtube.com/watch?v=abc#t=10'), 'https://www.youtube.com/watch?v=abc');
+  assert.equal(L.pageKey('https://en.wikipedia.org/wiki/Slab#History'), 'https://en.wikipedia.org/wiki/Slab');
+  assert.notEqual(L.pageKey('https://www.youtube.com/watch?v=abc'), L.pageKey('https://www.youtube.com/watch?v=def'));
+  assert.equal(L.pageKey('not a url'), 'not a url');
+});

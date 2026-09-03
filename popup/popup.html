@@ -14,6 +14,15 @@
     </div>
   </header>
 
+  <section class="page" id="page">
+    <div class="count"><b id="pageCount">…</b><span id="pageLabel">looking at this page</span></div>
+    <button class="mode wide" data-mode="seek-page" id="seekPage" disabled>
+      <span class="icon">🙈</span>
+      <span class="label">Seek on this page</span>
+      <span class="hint">Hunt every slab kept hidden here.</span>
+    </button>
+  </section>
+
   <section class="modes">
     <button class="mode" data-mode="hotseat">
       <span class="icon">🎨</span>
@@ -100,6 +109,8 @@
     </label>
   </section>
 
+  <label class="toggle"><input type="checkbox" id="badgeAll"> Show the hider count on the icon for every page <span class="small">(asks for the <i>tabs</i> permission)</span></label>
+
   <section class="stats" id="stats">
     <div><b id="stRounds">0</b><span>rounds</span></div>
     <div><b id="stFound">0</b><span>found</span></div>
@@ -117,6 +128,8 @@
         <li><b>Hider:</b> you get a blank grey slab. With 2 or 3 hiders, each paints in turn and the seeker must find them all. Drag it somewhere and paint it to match what is behind it. Use the eyedropper to copy colours, the stamp for a few pixel-perfect patches.</li>
         <li><b>Seeker:</b> click where you think the slab is before time or guesses run out. Hidden slabs are real objects: they idle and tilt a little, and their bare edges and shadow give them away.</li>
         <li><b>Chameleon Hunt:</b> the extension hides several slabs with tiny imperfections. Spot them all.</li>
+        <li><b>Hiders on this page:</b> slabs you share or paste stay hidden on that page. The icon badge counts them and <i>Seek on this page</i> hunts them all.</li>
+        <li><b>Seeker aids:</b> hold to magnify, move the mouse or tilt your phone to look around the slabs, and <i>Shake</i> to jolt everything for a moment.</li>
       </ol>
       <p class="small">Screenshots are taken only when you start a round and never leave your browser. Shortcut: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>.</p>
     </details>

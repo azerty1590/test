@@ -21,6 +21,21 @@ Turn **any web page** into a hide-and-seek arena. A hider gets a blank grey slab
 
 Seekers get a countdown, limited guesses, warmer/colder feedback, and a hint button that costs 10 seconds. Short synthesised sound cues can be turned off in the popup.
 
+## Hiders on this page
+
+Every slab you share and every code you paste stays hidden on that page (locally, in extension storage). The popup shows **N hiders on this page**, the toolbar badge shows the same number, and **Seek on this page** hunts them all at once; found ones can be removed from the page afterwards. Tick *Show the hider count on the icon for every page* to grant the optional `tabs` permission so the badge follows you from page to page. Without it the badge is refreshed whenever the popup opens or a round is played. There is no server: the count reflects slabs kept in this browser, which is why sharing codes matters.
+
+## Seeker aids and phones
+
+A screen cannot show real volume, so the seeker gets ways to look instead:
+
+- **Lens.** Hold a finger or the mouse still on the page and a magnifier floats above it (never under your hand). Release without guessing. The 🔍 button turns it into a hover lens for the mouse.
+- **Look-around.** Moving the mouse, or tilting a phone with a gyroscope, tilts every hidden slab a little the other way, so its edges and shadow drift while the page stays put.
+- **Shake.** Costs 5 seconds and makes everything hidden jolt for a moment.
+- **Haptics.** Hits, misses and the final seconds vibrate on devices that support it.
+
+Below 700 px the HUD wraps, buttons grow to thumb size, the toolbar hugs the safe area and modals go full width. Chrome on Android does not run extensions yet, but Chromium browsers that do (Kiwi, Yandex, Edge Canary) get this layout, and it also serves narrow desktop windows.
+
 ## Volume and wobble
 
 Paint can hide a player completely: with the default **Stamp ink: Unlimited** a patient hider can copy the page pixel for pixel. What gives a hidden slab away is that it is a physical object. While the seeker looks, every hidden slab idles and tilts a little in 3D, so its bare concrete back face and a sliding shadow peek out at the edges that turn towards you. The **Wobble** setting (Still, Subtle, Normal, Lively) sets how much they move in hot-seat and shared rounds, the solo hunt scales it with difficulty, and a hider can press **Preview** in the toolbar to watch their own slab wobble before committing. Wobble is drawn on the canvas with a compressed front face and an offset back face, so it costs nothing beyond a 30 fps redraw.

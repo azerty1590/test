@@ -263,6 +263,17 @@
     };
   }
 
+  // Identity of a page for the "hiders on this page" registry: origin + path +
+  // query (YouTube videos differ only by ?v=), never the hash.
+  function pageKey(href) {
+    try {
+      const u = new URL(href);
+      return u.origin + u.pathname + u.search;
+    } catch {
+      return String(href || '');
+    }
+  }
+
   function seekScore(msLeft, msTotal, guessesUsed, guessLimit, hintsUsed) {
     if (msLeft <= 0) return 0;
     const timePart = Math.round(700 * (msLeft / msTotal));
@@ -310,6 +321,7 @@
     decodeShareCode,
     rescalePlacement,
     seekScore,
+    pageKey,
     formatTime,
     temperatureHint,
   };
