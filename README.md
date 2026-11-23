@@ -1,14 +1,20 @@
-# Doodle Freeze
+# Standstill
 
-A mobile first-person shooter drawn on a notebook page. Its one trick: you can stop time.
-Every bullet hangs in the air, the doodles freeze mid-step, and you keep moving.
+A mobile first-person shooter where the clock only runs while you do.
 
-- **Freeze** the page, walk out of the line of fire, and line up shots. Your own shots hang
-  in front of the blaster until you let time go again.
-- **Send it back**: aim at a hanging red bullet and shoot it. It turns blue and flies back
-  to whoever fired it.
-- Clear a page of doodles to move on to the next one. Walkers shoot, rushers charge,
-  drones strafe from above, spreaders fire fans of five.
+Stand still and the room nearly freezes: bullets hang in the air with their streaks behind
+them, and you have all the time you want to read the situation. Every step, turn and shot
+lets time run again, for you and for everything trying to hit you.
+
+- **Time follows you.** Walking runs the clock at full speed, turning nudges it, and each
+  shot costs a short burst. The gauge at the top shows the current rate.
+- **One hit ends it**, for them and for you. Retry is instant and restarts the same room.
+- **Your blaster readies on the world clock**, so you cannot stand still and empty it. You
+  have to move to shoot again, and moving is what lets their bullets reach you.
+- **Shoot bullets out of the air.** Put the crosshair on an incoming shot (the dot turns
+  pink) and fire.
+- Rooms get harder: gunners, rushers that charge, drones overhead, spreaders firing fans
+  of five. Cover changes from room to room.
 
 ## Play
 
@@ -27,23 +33,21 @@ from disk does not, because browsers block model loading from `file://`.
 |---|---|---|
 | Move | left thumb (floating stick) | WASD |
 | Aim | right thumb, or drag on FIRE | mouse |
-| Shoot | hold FIRE | hold left click |
-| Freeze / unfreeze | FREEZE | Space or right click |
-| Reload | load | R |
+| Shoot | hold FIRE | hold left click or Space |
 | Pause | II | P or Esc |
+| Retry after a hit | Retry | Space, Enter or R |
 
 ## How it is built
 
 - `index.html`: page shell, HUD and menus (plain HTML and CSS)
-- `game.js`: the whole game (rendering, time-stop, enemies, input, audio)
+- `game.js`: the whole game (rendering, the clock, enemies, input, audio)
 - `vendor/`: three.js r128 and its GLTF loader, vendored so the game runs offline
 - `assets/`: models, a shadow sprite and sounds. Models are glTF stored as `.json` (binary
   buffer embedded) so any static host serves them; `tools/glb-to-json.js` converts a `.glb`.
 
-The doodle look is done in `game.js`: toon-shaded fills, an ink outline on every model that
-re-jitters a few times a second, and hand-drawn canvas textures for the graph-paper floor
-and the ruled-paper sky. The outline wobble runs on world time, so the lines stop boiling
-when the page is frozen.
+The look is flat fills with three hard shading steps and thin edge lines on night blue.
+Models are stripped of their textures and recoloured in `game.js`. The room dims and cools
+while the clock crawls; hostiles and bullets are left out of that so they stay readable.
 
 ## Credits
 
