@@ -67,6 +67,10 @@ button { font: inherit; color: inherit; }
   -webkit-mask: radial-gradient(circle, transparent 9.5px, #000 10px); mask: radial-gradient(circle, transparent 9.5px, #000 10px); }
 #dot { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: var(--fg); }
 #dot.block { background: var(--shot); transform: scale(2.2); }
+#edges { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+.edge { position: absolute; left: -11px; top: -9px; width: 0; height: 0;
+  border-left: 11px solid transparent; border-right: 11px solid transparent; border-bottom: 18px solid var(--shot); }
+.edge.body { border-bottom-color: var(--hot); }
 #banner { position: absolute; left: 0; right: 0; top: 24%; text-align: center; opacity: 0; transition: opacity .2s;
   font-family: var(--display); font-size: clamp(40px, 12vmin, 84px); line-height: .95; letter-spacing: .03em; text-transform: uppercase; text-wrap: balance; }
 #banner small { display: block; margin-top: 8px; font-family: var(--data); font-size: 15px; letter-spacing: .14em; color: var(--dim); }
@@ -183,6 +187,7 @@ input[type=checkbox] { width: 24px; height: 24px; accent-color: var(--you); }
     </div>
     <div class="tr"><button id="pausebtn" type="button" aria-label="Pause">II</button></div>
     <div id="cross"></div><div id="dot"></div>
+    <div id="edges"></div>
     <div id="banner"></div>
     <div id="pops"></div>
     <div id="hint"></div>

@@ -1,22 +1,23 @@
 #!/usr/bin/env node
-// Sanity-check levels.js: rectangular maps, one start, sealed rooms, reachable hostiles and doors,
-// and enough doors for every wave. Usage: node tools/check-levels.js
+// Sanity-check levels.js: rectangular maps, one start, one exit, sealed rooms, reachable hostiles,
+// exit and doors, and doors for every wave. Usage: node tools/check-levels.js
 const path = require('path');
 global.window = {};
 require(path.join(__dirname, '..', 'levels.js'));
 const data = global.window.STANDSTILL;
-const WALK = /[.Pgrdsn1-9]/, TYPES = 'grdsn';
+const WALK = /[.PEgrdsn1-9]/, TYPES = 'grdsn';
 let bad = 0;
 const fail = (id, msg) => { bad++; console.log('FAIL ' + id + ': ' + msg); };
 
 function check(id, map, waves) {
   const rows = map.length, cols = map[0].length;
   if (map.some((r) => r.length !== cols)) return fail(id, 'rows differ in length');
-  let start = null, doors = 0, hostiles = 0;
+  let start = null, doors = 0, hostiles = 0, exits = 0;
   const marks = [];
   map.forEach((row, r) => [...row].forEach((ch, c) => {
-    if (!/[#=o.Pgrdsn1-9]/.test(ch)) fail(id, 'unknown symbol "' + ch + '" at row ' + r + ' col ' + c);
+    if (!/[#=o.PEgrdsn1-9]/.test(ch)) fail(id, 'unknown symbol "' + ch + '" at row ' + r + ' col ' + c);
     if (ch === 'P') { if (start) fail(id, 'more than one P'); start = [r, c]; }
+    if (ch === 'E') { exits++; marks.push([r, c, ch]); }
     if (/[1-9]/.test(ch)) { doors++; marks.push([r, c, ch]); }
     if (TYPES.includes(ch)) { hostiles++; marks.push([r, c, ch]); }
   }));
@@ -37,6 +38,7 @@ function check(id, map, waves) {
     hostiles += w.length;
   }
   if (!hostiles && waves) fail(id, 'no hostiles');
+  if (waves && exits !== 1) fail(id, 'needs exactly one exit E, found ' + exits);
   return hostiles;
 }
 

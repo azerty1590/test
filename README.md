@@ -9,8 +9,13 @@ lets time run again, for you and for everything trying to hit you.
 ## What is in the game
 
 - **Campaign:** 15 hand-built levels in three chapters (Cold Start, Undertow, Afterimage),
-  each chapter with its own colour scheme. Rooms have real shapes: doorways, corridors,
-  pillar halls, side rooms. Levels unlock in order.
+  each chapter with its own colour scheme. Levels run forward: you start at one end,
+  everything hostile is ahead of you, and the way leads (sometimes round a corner) to an
+  exit that opens once the level is clear. Levels unlock in order.
+- **Fair fire:** hostiles wait where they are placed and wake when they can see you. They
+  only open fire while they are in your view. Every hostile bullet draws the line it will
+  travel, every shot has some aim error, and markers round the crosshair point at any
+  threat that is outside your view.
 - **Five hostiles:** gunners, rushers that charge, drones overhead, spreaders that fire
   fans of five, and snipers that paint a line on you before firing down it. Ground
   hostiles find their way round walls and through doors.
@@ -19,7 +24,8 @@ lets time run again, for you and for everything trying to hit you.
 - **Chips and the Armory:** clearing levels and earning medals pays chips. Chips buy two
   more weapons (Repeater, Scatter) and three upgrades (Deep Still, Quick Hands, Second
   Chance).
-- **Endless:** unlocks after level 1-5. Waves keep coming; your best wave is saved.
+- **Endless:** unlocks after level 1-5. Waves keep appearing in front of you; your best
+  wave is saved.
 - **Rules of the clock:** walking runs it at full speed, turning nudges it, each shot costs
   a short burst. One hit ends the attempt for either side. Your weapon readies on the world
   clock, so you have to move to shoot again. You can shoot bullets out of the air.
@@ -52,22 +58,26 @@ installed to the home screen and played offline (`manifest.webmanifest`, `sw.js`
 ## Adding levels
 
 Levels are text maps in `levels.js`; the legend is at the top of that file. A level is a
-name, a one-line tip, a map and an optional list of waves:
+name, a one-line tip and a map with a start `P`, an exit `E` and hostiles placed ahead:
 
 ```js
-{ name: 'Doorway', tip: 'Step out, fire, step back.', waves: ['rr'],
+{ name: 'Doorway', tip: 'Step into the door, fire, step back.',
   map: [
-    '###########',
-    '#....#...g#',
-    '#.P..#....#',
-    '#.........#',
-    '#1...#...2#',
-    '###########' ] }
+    '#######',
+    '#..E..#',
+    '#g....#',
+    '#....g#',
+    '###.###',
+    '#..=..#',
+    '#..P..#',
+    '#######' ] }
 ```
 
-Run `node tools/check-levels.js` after editing. It checks that every room is sealed, that
-every hostile and door can be reached, and that waves have doors to come through. Par is
-worked out from the number of hostiles and the room size unless the level sets `par`.
+Run `node tools/check-levels.js` after editing. It checks that every level is sealed, has
+one start and one exit, and that every hostile and the exit can be reached. Par is worked
+out from the number of hostiles and the walk to the exit unless the level sets `par`.
+Optional reinforcement waves (`waves: ['rr']` with numbered doors in the map) only ever
+come through a door that is in front of the player.
 
 ## How it is built
 

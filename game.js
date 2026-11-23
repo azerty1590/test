@@ -277,6 +277,10 @@
   }
 
   const CODE = { g: 'gunner', r: 'rusher', d: 'drone', s: 'spreader', n: 'sniper' };
+  // the exit: a faint column of your colour that brightens once the level is clear
+  const exitMat = new THREE.MeshBasicMaterial({ color: col(C.you), transparent: true, opacity: 0.07, depthWrite: false, fog: false, side: THREE.DoubleSide });
+  const exitBeamGeo = new THREE.BoxGeometry(CELL * 0.62, 3.4, CELL * 0.62);
+  const exitPadGeo = new THREE.PlaneGeometry(CELL * 0.9, CELL * 0.9).rotateX(-Math.PI / 2);
   let grid = null;         // { cols, rows, walk, hx, hz, start, cast, doors }
   let roomGroup = null, mapNow = null;
   const cellX = (c) => (c - grid.cols / 2 + 0.5) * CELL;
@@ -290,7 +294,7 @@
     if (roomGroup) { scene.remove(roomGroup); roomGroup.traverse((o) => { if (o.isInstancedMesh) o.dispose(); }); }
     obstacles.length = 0;
     const rows = map.length, cols = map[0].length;
-    grid = { cols, rows, walk: new Uint8Array(cols * rows), hx: cols * CELL / 2, hz: rows * CELL / 2, start: [0, 0], cast: [], doors: [] };
+    grid = { cols, rows, walk: new Uint8Array(cols * rows), hx: cols * CELL / 2, hz: rows * CELL / 2, start: [0, 0], exit: null, cast: [], doors: [] };
     flow = new Uint16Array(cols * rows); flowAt = -1;
     queueBuf = new Int32Array(cols * rows + 16);
     const walls = [], lows = [], pills = [];
@@ -310,6 +314,7 @@
           if (ch === 'P') grid.start = [x, z];
           else if (CODE[ch]) grid.cast.push([CODE[ch], x, z]);
           else if (ch >= '1' && ch <= '9') grid.doors.push([x, z]);
+          else if (ch === 'E') grid.exit = [x, z];
         }
       }
     }
@@ -317,6 +322,12 @@
     if (walls.length) roomGroup.add(instancedFrom(models.brick, walls, wallMat));
     if (lows.length) roomGroup.add(instancedFrom(models.brick, lows, wallMat));
     if (pills.length) roomGroup.add(instancedFrom(models.brick, pills, wallMat));
+    if (grid.exit) {
+      const beam = new THREE.Mesh(exitBeamGeo, exitMat), pad = new THREE.Mesh(exitPadGeo, exitMat);
+      beam.position.set(grid.exit[0], 1.7, grid.exit[1]); pad.position.set(grid.exit[0], 0.02, grid.exit[1]);
+      beam.renderOrder = pad.renderOrder = 4;
+      roomGroup.add(beam, pad);
+    }
     scene.add(roomGroup);
   }
 
@@ -400,7 +411,7 @@
   // ------------------------------------------------------------------ pooled bullets, sparks, shadows
   const MAXB = 220;
   const bullets = [];
-  let bulletHead, bulletTrail, bulletSeq = 0;
+  let bulletHead, bulletTrail, bulletPath, bulletSeq = 0;
   const YOU = col(C.you), SHOT = col(C.shot), RIM = col(C.rim);
   const YOU_T = col(C.you).multiplyScalar(0.45), SHOT_T = col(C.shot).multiplyScalar(0.5);
   const MAXD = 160;
@@ -416,7 +427,10 @@
     for (let i = 0; i < MAXB; i++) { bulletHead.setColorAt(i, YOU); bulletTrail.setColorAt(i, YOU_T); }
     bulletHead.count = bulletTrail.count = 0;
     bulletHead.frustumCulled = bulletTrail.frustumCulled = false;
-    scene.add(bulletTrail, bulletHead);
+    // thin line from each hostile bullet to where it will land
+    bulletPath = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: col(C.shot), transparent: true, opacity: 0.55, depthWrite: false, fog: false }), MAXB);
+    bulletPath.count = 0; bulletPath.frustumCulled = false; bulletPath.renderOrder = 3;
+    scene.add(bulletPath, bulletTrail, bulletHead);
 
     dropMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 6, 5), new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false }), MAXD);
     for (let i = 0; i < MAXD; i++) dropMesh.setColorAt(i, YOU);
@@ -436,6 +450,14 @@
     if (!b) { if (bullets.length >= MAXB) return null; b = {}; bullets.push(b); }
     b.alive = true; b.team = team; b.x = x; b.y = y; b.z = z; b.dx = dx; b.dy = dy; b.dz = dz;
     b.speed = speed; b.r = r; b.owner = owner; b.life = life || 6; b.age = 0; b.shot = 0; b.id = bulletSeq++;
+    b.reach = 0;
+    if (team === 1) { // distance to whatever it will hit, so its path can be drawn ahead of it
+      const far = 45;
+      let t = segHit(x, y, z, x + dx * far, y + dy * far, z + dz * far);
+      if (t > 1) t = 1;
+      if (dy < -0.001) t = Math.min(t, (y / -dy) / far);
+      b.reach = t * far;
+    }
     return b;
   }
   function spawnDrops(x, y, z, color, n, power) {
@@ -525,6 +547,24 @@
   // ------------------------------------------------------------------ progression data
   const DATA = window.STANDSTILL;
   const LEVELS = [];
+  // cells walked from the start to the exit, for the par time
+  function pathCells(map) {
+    const rows = map.length, cols = map[0].length, dist = new Map();
+    let start = -1, goal = -1;
+    map.forEach((row, r) => [...row].forEach((ch, c) => { if (ch === 'P') start = r * cols + c; if (ch === 'E') goal = r * cols + c; }));
+    if (start < 0 || goal < 0) return 0;
+    const todo = [start]; dist.set(start, 0);
+    for (let h = 0; h < todo.length; h++) {
+      const i = todo[h], r = (i / cols) | 0, c = i % cols;
+      if (i === goal) return dist.get(i);
+      for (const [nr, nc] of [[r + 1, c], [r - 1, c], [r, c + 1], [r, c - 1]]) {
+        const k = nr * cols + nc, ch = map[nr] && map[nr][nc];
+        if (!ch || ch === '#' || ch === '=' || ch === 'o' || ch === ' ' || dist.has(k)) continue;
+        dist.set(k, dist.get(i) + 1); todo.push(k);
+      }
+    }
+    return 0;
+  }
   DATA.chapters.forEach((ch, ci) => ch.levels.forEach((lv, li) => {
     let n = 0;
     for (const row of lv.map) for (const c of row) if (CODE[c]) n++;
@@ -532,7 +572,7 @@
     LEVELS.push({
       id: (ci + 1) + '-' + (li + 1), chapter: ci, theme: ch.theme, name: lv.name, tip: lv.tip, map: lv.map, waves: lv.waves || [], hostiles: n,
       // par is measured on the world clock: how little time you let pass
-      par: lv.par || Math.round(4 + 2.2 * n + 0.12 * (lv.map.length + lv.map[0].length)),
+      par: lv.par || Math.round(3 + 2.2 * n + 0.5 * pathCells(lv.map)),
     });
   }));
 
@@ -577,19 +617,19 @@
   let idle = 0.04;         // how fast the clock crawls when you hold still
   let W = WEAPONS.pistol;
   // the current attempt
-  const run = { mode: 'level', lv: null, waves: [], waveIdx: 0, waveT: 0, clock: 0, shots: 0, hits: 0, hitShots: {}, shield: false, wave: 0, endT: 0 };
+  const run = { mode: 'level', lv: null, waves: [], waveIdx: 0, waveT: 0, clock: 0, shots: 0, hits: 0, hitShots: {}, shield: false, wave: 0, endT: 0, open: false };
   let worldClock = 0, realClock = 0, shotSeq = 0;
   const enemies = [];
   const debris = [];
   const tut = { move: false };
 
   const TYPES = {
-    gunner:   { base: 'bot',   scale: 1.9, hp: 1, r: 0.62, cy: 0.95, speed: 2.4, near: 5, far: 11, cd: 2.0, tele: 0.5,  bspeed: 14, color: C.gunner, gun: true },
+    gunner:   { base: 'bot',   scale: 1.9, hp: 1, r: 0.62, cy: 0.95, speed: 2.4, near: 5, far: 11, cd: 2.0, tele: 0.5,  bspeed: 13, spread: 0.055, color: C.gunner, gun: true },
     rusher:   { base: 'bot',   scale: 1.5, hp: 1, r: 0.52, cy: 0.75, speed: 4.3, melee: true, color: C.rusher },
-    drone:    { base: 'drone', scale: 1.4, hp: 1, r: 0.6,  cy: 0.4,  speed: 3.0, near: 6, far: 11, cd: 2.4, tele: 0.45, bspeed: 15, fly: 2.9, twin: true, color: C.drone },
-    spreader: { base: 'drone', scale: 2.1, hp: 2, r: 0.88, cy: 0.6,  speed: 1.8, near: 7, far: 12, cd: 3.2, tele: 0.65, bspeed: 11, fly: 3.5, fan: 5, color: C.spreader },
+    drone:    { base: 'drone', scale: 1.4, hp: 1, r: 0.6,  cy: 0.4,  speed: 3.0, near: 6, far: 11, cd: 2.4, tele: 0.45, bspeed: 14, spread: 0.065, fly: 2.9, twin: true, color: C.drone },
+    spreader: { base: 'drone', scale: 2.1, hp: 2, r: 0.88, cy: 0.6,  speed: 1.8, near: 7, far: 12, cd: 3.2, tele: 0.65, bspeed: 11, spread: 0.03, fly: 3.5, fan: 5, color: C.spreader },
     // stands its ground, paints a line on you, then fires something fast down it
-    sniper:   { base: 'bot',   scale: 2.0, hp: 1, r: 0.64, cy: 1.0,  speed: 0, near: 0, far: 99, cd: 2.6, tele: 1.3, lock: 0.4, bspeed: 34, color: C.sniper, gun: true, still: true, range: 60 },
+    sniper:   { base: 'bot',   scale: 2.0, hp: 1, r: 0.64, cy: 1.0,  speed: 0, near: 0, far: 99, cd: 2.6, tele: 1.3, lock: 0.4, bspeed: 30, spread: 0, color: C.sniper, gun: true, still: true, range: 60 },
   };
   const COST = { gunner: 1, rusher: 0.8, drone: 1.3, spreader: 2.6, sniper: 2 };
 
@@ -617,7 +657,7 @@
     warn.position.y = def.fly ? def.cy + def.r + 0.7 : def.scale * 0.9 + 0.55; warn.visible = false; warn.renderOrder = 5;
     root.add(warn);
     const e = {
-      type, def, root, model, parts, warn, laser: null, alive: true, hp: def.hp, x, z, y: def.fly || 0, r: def.r, cy: def.cy,
+      type, def, root, model, parts, warn, laser: null, alive: true, awake: false, seen: false, hp: def.hp, x, z, y: def.fly || 0, r: def.r, cy: def.cy,
       yaw: 0, vx: 0, vz: 0, fireCd: rand(0.9, 1.9), tele: 0, burstT: 0, side: 1, ax: 0, ay: 1.2, az: 0,
       strafe: Math.random() < 0.5 ? -1 : 1, strafeT: rand(1.5, 3), phase: rand(0, TAU),
       los: false, losT: 0, flash: 0, stuck: 0, detourT: 0, detourDir: 1, wind: 0, atkCd: 0.4, mixer: null, idle: null, walk: null,
@@ -650,11 +690,14 @@
   }
 
   // Bring a wave in through the doors, starting with the doors furthest from you.
-  function spawnWave(letters) {
-    const doors = grid.doors.map((d) => ({ d, far: Math.hypot(d[0] - P.x, d[1] - P.z) + rand(0, 3) })).sort((a, b) => b.far - a.far);
+  const aheadOf = (x, z) => { const dx = x - P.x, dz = z - P.z, l = Math.hypot(dx, dz) || 1; return (-Math.sin(P.yaw) * dx - Math.cos(P.yaw) * dz) / l; };
+  // Doors a wave may use right now: in front of you and not on top of you. Empty means "wait".
+  const doorsAhead = () => grid.doors.filter((d) => aheadOf(d[0], d[1]) > 0.3 && Math.hypot(d[0] - P.x, d[1] - P.z) > 5);
+  function spawnWave(letters, doors) {
     [...letters].forEach((ch, i) => {
-      const door = doors[i % doors.length].d, lap = Math.floor(i / doors.length);
+      const door = doors[i % doors.length], lap = Math.floor(i / doors.length);
       const e = makeEnemy(CODE[ch], door[0] + lap * rand(-0.8, 0.8), door[1] + lap * rand(-0.8, 0.8));
+      e.awake = true;
       spawnDrops(e.x, e.y + e.cy, e.z, RIM, 10, 3);
     });
     sfx('lock', 1);
@@ -665,6 +708,7 @@
       if (!grid.walk[r * grid.cols + c]) continue;
       const x = cellX(c), z = cellZ(r), d = Math.hypot(x - P.x, z - P.z);
       if (d < 8.5) continue;
+      if (i < 65 && aheadOf(x, z) < 0.45) continue; // new arrivals appear where you are looking
       if (i < 50 && enemies.some((e) => Math.hypot(e.x - x, e.z - z) < 4.5)) continue;
       return [x, z];
     }
@@ -715,7 +759,7 @@
   function updateHUD(dt) {
     setText(hud.room, 'room', run.mode === 'endless' ? 'Wave ' + pad(run.wave) : run.lv.id);
     const left = leftCount();
-    setText(hud.left, 'left', left ? left + ' left' : 'clear');
+    setText(hud.left, 'left', left ? left + ' left' : run.mode === 'level' && grid.exit ? 'reach the exit' : 'clear');
     const t2 = Math.round(ts * 100);
     if (cache.ts !== t2) {
       cache.ts = t2;
@@ -733,6 +777,33 @@
     if (bannerTimer > 0 && (bannerTimer -= dt) <= 0) hud.banner.classList.remove('on');
     if (hintTimer > 0 && (hintTimer -= dt) <= 0) hud.hint.classList.remove('on');
     if (flashA > 0) { flashA = Math.max(0, flashA - dt * 2.4); hud.flash.style.opacity = flashA.toFixed(2); }
+  }
+
+  // Markers round the crosshair pointing at danger that is outside your view:
+  // a bullet heading your way, or a hostile winding up to strike.
+  const edgeEls = [];
+  for (let i = 0; i < 6; i++) { const d = el('i', 'edge'); d.hidden = true; $('edges').appendChild(d); edgeEls.push(d); }
+  function updateEdges() {
+    const sy = Math.sin(P.yaw), cy = Math.cos(P.yaw), R = Math.round(Math.min(viewW, viewH) * 0.4);
+    let n = 0;
+    const mark = (x, z, body) => {
+      if (n >= edgeEls.length) return;
+      const dx = x - P.x, dz = z - P.z;
+      const ang = Math.atan2(dx * cy - dz * sy, -dx * sy - dz * cy);
+      if (Math.abs(ang) < 0.85) return; // already on screen
+      const d = edgeEls[n++];
+      d.hidden = false; d.className = body ? 'edge body' : 'edge';
+      d.style.transform = 'rotate(' + ang.toFixed(2) + 'rad) translateY(-' + R + 'px)';
+    };
+    for (let i = 0; i < bullets.length; i++) {
+      const b = bullets[i];
+      if (!b.alive || b.team !== 1) continue;
+      const dx = P.x - b.x, dz = P.z - b.z, d = Math.hypot(dx, dz);
+      if (d > 16 || d < 0.01 || (b.dx * dx + b.dz * dz) / d < 0.9) continue; // only ones coming at you
+      mark(b.x, b.z, false);
+    }
+    for (const e of enemies) if (e.awake && (e.tele > 0 || e.wind > 0 || (e.def.melee && Math.hypot(e.x - P.x, e.z - P.z) < 7))) mark(e.x, e.z, true);
+    for (let i = n; i < edgeEls.length; i++) if (!edgeEls[i].hidden) edgeEls[i].hidden = true;
   }
 
   // ------------------------------------------------------------------ player
@@ -875,10 +946,11 @@
       dx = P.x + P.vx * lead - o.x; dy = 1.2 - o.y; dz = P.z + P.vz * lead - o.z;
     }
     const l = Math.hypot(dx, dy, dz) || 1; dx /= l; dy /= l; dz /= l;
-    const n = def.fan || 1;
+    // nobody is a perfect shot: every bullet leaves with some error, and its drawn path shows where it will really go
+    const n = def.fan || 1, sp = def.spread * clamp(1 - diff() * 0.03, 0.6, 1);
     for (let k = 0; k < n; k++) {
-      const a = (k - (n - 1) / 2) * 0.15 + (def.still ? 0 : rand(-0.02, 0.02)), ca = Math.cos(a), sa = Math.sin(a);
-      spawnBullet(1, o.x, o.y, o.z, dx * ca - dz * sa, dy + (def.still ? 0 : rand(-0.012, 0.012)), dx * sa + dz * ca, speed, def.fan ? 0.14 : 0.12, e, 6);
+      const a = (k - (n - 1) / 2) * 0.15 + rand(-sp, sp), ca = Math.cos(a), sa = Math.sin(a);
+      spawnBullet(1, o.x, o.y, o.z, dx * ca - dz * sa, dy + rand(-sp, sp) * 0.35, dx * sa + dz * ca, speed, def.fan ? 0.15 : 0.14, e, 6);
     }
     sfx('eshoot', clamp(1.2 - d / 22, 0.2, 0.8), def.fan ? 0.7 : def.still ? 1.4 : rand(0.95, 1.1));
   }
@@ -907,6 +979,13 @@
     if ((e.losT -= dtW) <= 0) {
       e.losT = 0.2;
       e.los = segHit(e.x, e.y + def.cy, e.z, P.x, EYE - 0.3, P.z) > 1;
+    }
+    // in your view (with a little margin past the screen edge)? Shooters will not open fire from outside it.
+    e.seen = (Math.sin(P.yaw) * ux + Math.cos(P.yaw) * uz) > 0.42;
+    if (!e.awake) {
+      // placed hostiles wait until they can see you, or you walk right up to them
+      if ((e.los && dist < 30) || dist < 4.5) { e.awake = true; e.fireCd = Math.max(e.fireCd, rand(0.7, 1.2)); }
+      else { if (e.mixer) e.mixer.update(dtW); return; }
     }
 
     if (def.melee) {
@@ -942,7 +1021,7 @@
         else if (f === 1 && !def.fly && !e.los && flowDir(e)) { mx = flowVec.x; mz = flowVec.z; }
         else { const sw = f === 0 ? 1 : 0.45; mx = ux * f - uz * e.strafe * sw; mz = uz * f + ux * e.strafe * sw; }
         e.fireCd -= dtW;
-        if (e.fireCd <= 0 && e.los && dist < (def.range || 24)) {
+        if (e.fireCd <= 0 && e.los && e.seen && dist < (def.range || 24)) {
           e.tele = def.tele; e.warn.visible = true;
           e.fireCd = def.cd * Math.max(0.55, 1 - diff() * 0.04) * rand(0.85, 1.25);
           if (def.still) { e.ax = P.x; e.ay = 1.2; e.az = P.z; e.laser.visible = true; aimLaser(e); }
@@ -993,7 +1072,7 @@
   }
 
   function damageEnemy(e, b) {
-    e.hp -= 1;
+    e.hp -= 1; e.awake = true;
     creditHit(b);
     spawnDrops(b.x, b.y, b.z, YOU, 5, 2.5);
     if (e.hp <= 0) { killEnemy(e, b); return; }
@@ -1041,7 +1120,7 @@
       const b = bullets[i];
       if (!b.alive) continue;
       const step = b.speed * dtW;
-      b.life -= dtW; b.age += dtW;
+      b.life -= dtW; b.age += dtW; b.reach -= step;
       const nx = b.x + b.dx * step, ny = b.y + b.dy * step, nz = b.z + b.dz * step;
       let hitT = 2, kind = 0, victim = null;
       const tw = segHit(b.x, b.y, b.z, nx, ny, nz);
@@ -1087,12 +1166,12 @@
 
   const bq = new THREE.Quaternion(), bz = new THREE.Vector3(0, 0, 1), bd = new THREE.Vector3();
   function drawPools() {
-    let n = 0;
+    let n = 0, np = 0;
     for (let i = 0; i < bullets.length; i++) {
       const b = bullets[i];
       if (!b.alive) continue;
       // the streak behind a bullet never shrinks, so you can read where it is going while standing still
-      const len = Math.min(b.team === 0 ? 1.5 : 1.1, b.age * b.speed * 0.5 + 0.05);
+      const len = Math.min(b.team === 0 ? 1.5 : 1.7, b.age * b.speed * 0.5 + 0.05);
       let r = b.r;
       if (b.team === 1) r *= 1 + 0.12 * Math.sin(realClock * 8 + b.id);
       _m.makeScale(r, r, r); _m.setPosition(b.x, b.y, b.z);
@@ -1101,7 +1180,13 @@
       _m.compose(_p.set(b.x - b.dx * len, b.y - b.dy * len, b.z - b.dz * len), bq, _s.set(b.r * 0.55, b.r * 0.55, len));
       bulletTrail.setMatrixAt(n, _m); bulletTrail.setColorAt(n, b.team === 0 ? YOU_T : SHOT_T);
       n++;
+      if (b.team === 1 && b.reach > 0.4) {
+        const h = b.reach / 2, w = 0.022 + 0.002 * Math.hypot(b.x - camera.position.x, b.z - camera.position.z);
+        _m.compose(_p.set(b.x + b.dx * h, b.y + b.dy * h, b.z + b.dz * h), bq, _s.set(w, w, b.reach));
+        bulletPath.setMatrixAt(np++, _m);
+      }
     }
+    bulletPath.count = np; bulletPath.instanceMatrix.needsUpdate = true;
     bulletHead.count = bulletTrail.count = n;
     bulletHead.instanceMatrix.needsUpdate = bulletTrail.instanceMatrix.needsUpdate = true;
     bulletHead.instanceColor.needsUpdate = bulletTrail.instanceColor.needsUpdate = true;
@@ -1279,7 +1364,7 @@
     clearEnemies(); clearInk();
     run.mode = mode; run.lv = lv;
     run.waves = mode === 'level' ? lv.waves.slice() : []; run.waveIdx = 0; run.waveT = 0.6;
-    run.clock = 0; run.shots = 0; run.hits = 0; run.hitShots = {}; run.wave = 0; run.endT = 0;
+    run.clock = 0; run.shots = 0; run.hits = 0; run.hitShots = {}; run.wave = 0; run.endT = 0; run.open = false;
     run.shield = !!save.owned.shield;
     setTheme(mode === 'level' ? lv.theme : 'night');
     buildRoom(mode === 'level' ? lv.map : DATA.arena);
@@ -1288,10 +1373,30 @@
     Object.assign(P, { x: grid.start[0], z: grid.start[1], pitch: 0, vx: 0, vz: 0, fireCd: 0, pulse: 0, lookF: 0 });
     ts = idle; beatPos = 0; flowAt = -1;
     for (const c of grid.cast) makeEnemy(c[0], c[1], c[2]);
-    // start out facing the nearest hostile, or the middle of the room
+    // start out facing the nearest hostile you can actually see; failing that, down the longest open stretch
     let fx = 0, fz = 0, bd2 = 1e9;
-    for (const e of enemies) { const d = Math.hypot(e.x - P.x, e.z - P.z); if (d < bd2) { bd2 = d; fx = e.x; fz = e.z; } }
-    P.yaw = Math.atan2(-(fx - P.x), -(fz - P.z));
+    for (const e of enemies) {
+      const d = Math.hypot(e.x - P.x, e.z - P.z);
+      if (d < bd2 && segHit(P.x, EYE, P.z, e.x, e.y + e.cy, e.z) > 1) { bd2 = d; fx = e.x - P.x; fz = e.z - P.z; }
+    }
+    if (bd2 === 1e9 && grid.exit) {
+      // nobody in sight: face the way the level leads, a few cells along the route to the exit
+      const cols = grid.cols, rows = grid.rows, d = new Uint16Array(cols * rows).fill(9999), q = [rowOf(grid.exit[1]) * cols + colOf(grid.exit[0])];
+      d[q[0]] = 0;
+      for (let h = 0; h < q.length; h++) {
+        const i = q[h];
+        for (const k of [i - 1, i + 1, i - cols, i + cols]) if (k >= 0 && k < cols * rows && grid.walk[k] && d[k] > d[i] + 1) { d[k] = d[i] + 1; q.push(k); }
+      }
+      let at = rowOf(P.z) * cols + colOf(P.x);
+      for (let step = 0; step < 3; step++) {
+        let nb = at;
+        for (const k of [at - cols, at + 1, at + cols, at - 1]) if (k >= 0 && k < cols * rows && d[k] < d[nb]) nb = k;
+        at = nb;
+      }
+      fx = cellX(at % cols) - P.x; fz = cellZ((at / cols) | 0) - P.z;
+      if (Math.hypot(fx, fz) < 0.1) { fx = 0; fz = -1; }
+    }
+    P.yaw = Math.atan2(-fx, -fz);
     updateFlow();
     state = 'play';
     showSheet(null, false); hudEl.hidden = false;
@@ -1311,6 +1416,7 @@
     gameEl.classList.remove('playing');
     releasePointer(); endJoy(); input.fire = false;
     hud.hint.classList.remove('on'); hud.banner.classList.remove('on');
+    for (const d of edgeEls) d.hidden = true;
     flash(0.85); sfx('dead'); setHum(-1);
     try { if (navigator.vibrate) navigator.vibrate(60); } catch (e) { /* not available */ }
     if (run.mode === 'endless') {
@@ -1553,14 +1659,15 @@
     // waves
     if (run.mode === 'level') {
       if (run.waveIdx < run.waves.length && enemies.length <= 1 && (run.waveT -= dtW) <= 0) {
-        spawnWave(run.waves[run.waveIdx++]); run.waveT = 0.6;
-        pop('Wave ' + (run.waveIdx + 1));
+        const doors = doorsAhead();
+        if (!doors.length) run.waveT = 0.15; // no door in front of you yet: hold the wave
+        else { spawnWave(run.waves[run.waveIdx++], doors); run.waveT = 0.6; pop('Wave ' + (run.waveIdx + 1)); }
       }
     } else if (!enemies.length && (run.waveT -= dt) <= 0) {
       run.wave++; run.waveT = 1.2;
       if (run.wave > 1) { sfx('clear', 0.6); run.shield = run.shield || (!!save.owned.shield && run.wave % 3 === 1); }
       banner('Wave ' + pad(run.wave), '', 1.4);
-      for (const t of composeEndless(run.wave)) { const p = freeSpot(); makeEnemy(t, p[0], p[1]); }
+      for (const t of composeEndless(run.wave)) { const p = freeSpot(); makeEnemy(t, p[0], p[1]).awake = true; }
     }
 
     for (let i = enemies.length - 1; i >= 0; i--) updateEnemy(enemies[i], dtW, dt);
@@ -1568,9 +1675,12 @@
     updateDrops(dtW); updateDebris(dtW);
 
     if (state === 'play' && run.mode === 'level' && run.waveIdx >= run.waves.length && !enemies.length) {
-      if (run.endT <= 0) { run.endT = 0.9; banner('Clear', '', 0.9); }
+      if (!run.open) { run.open = true; if (grid.exit) { banner('Exit open', '', 1.1); sfx('lock'); } else { run.endT = 0.9; banner('Clear', '', 0.9); } }
+      if (grid.exit) { if (Math.hypot(P.x - grid.exit[0], P.z - grid.exit[1]) < 1.25) win(); }
       else if ((run.endT -= dt) <= 0) win();
     }
+    exitMat.opacity = run.open ? 0.24 + 0.1 * Math.sin(realClock * 5) : 0.07;
+    updateEdges();
 
     // camera
     camera.position.set(P.x, EYE + Math.sin(P.bob * 2) * 0.035 * moveAmt, P.z);
